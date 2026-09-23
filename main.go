@@ -3,18 +3,21 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/HobaiRiku/wsl2-auto-portproxy/lib/config"
-	"github.com/HobaiRiku/wsl2-auto-portproxy/lib/proxy"
-	"github.com/HobaiRiku/wsl2-auto-portproxy/lib/service"
-	"github.com/HobaiRiku/wsl2-auto-portproxy/lib/storage"
 	"log"
 	"os"
 	"time"
+
+	"github.com/HobaiRiku/wsl2-auto-portproxy/lib/proxy"
+	"github.com/HobaiRiku/wsl2-auto-portproxy/lib/service"
+	"github.com/HobaiRiku/wsl2-auto-portproxy/lib/storage"
+	"github.com/HobaiRiku/wsl2-auto-portproxy/lib/wdiscovery"
 )
 
 var version string
 
 func main() {
+	// logs go to stdout; stderr stays reserved for real process errors
+	log.SetOutput(os.Stdout)
 	// print version
 	var showVersion bool
 	flag.BoolVar(&showVersion, "v", false, "show version")
@@ -23,117 +26,67 @@ func main() {
 		fmt.Println(version)
 		os.Exit(1)
 	}
-	ready := make(chan bool)
-	// get config interval
-	go func() {
-		for {
-			c, err := config.GetConfig()
-			if err != nil {
-				log.Printf("error getting config file: %s", err)
-			} else {
-				storage.C = c
-			}
-			ready <- true
-			time.Sleep(time.Second)
-		}
-	}()
+
+	// learn {wslIp, ports, agentPort} from agent UDP broadcasts
+	go wdiscovery.ListenLoop()
 
 	for {
-		// wait for a config update interval
-		<-ready
-		// get linux's ip
-		storage.WslIp, _ = service.GetWslIP()
-		// get all tcp ports in linux now
-		linuxPorts, err := service.GetLinuxHostPorts()
-		if err != nil {
-			log.Printf("GetLinuxHostPorts error: %s, retrying", err)
-			continue // Skipping current loop is Necessary. Otherwise, running port will be stopped.
-		}
-		// change proxy port by config "predefined"
-		for i, p := range linuxPorts {
-			for _, predefinedTcpPort := range storage.C.Predefined.Tcp {
-				if p.Port == predefinedTcpPort.Remote {
-					linuxPorts[i].ProxyPort = predefinedTcpPort.Local
-				}
-			}
-		}
-		// filter by config "ignore"
-		for i := 0; i < len(linuxPorts); {
-			needToDelete := false
-			for _, ignorePort := range storage.C.Ignore.Tcp {
-				if ignorePort == linuxPorts[i].Port {
-					needToDelete = true
-				}
-			}
-			if needToDelete {
-				linuxPorts = append(linuxPorts[:i], linuxPorts[i+1:]...)
-			} else {
-				i++
-			}
-		}
-		// filter by config "OnlyPredefined"
-		if storage.C.OnlyPredefined {
-			for i := 0; i < len(linuxPorts); {
-				needToDelete := true
-				for _, predefinedTcpPort := range storage.C.Predefined.Tcp {
-					if predefinedTcpPort.Remote == linuxPorts[i].Port {
-						needToDelete = false
-					}
-				}
-				if needToDelete {
-					linuxPorts = append(linuxPorts[:i], linuxPorts[i+1:]...)
-				} else {
-					i++
-				}
-			}
-		}
-		// get all tcp ports in local windows now
+		desired := wdiscovery.Snapshot()
+
+		// ports already taken on Windows are omitted
+		used := map[int64]bool{}
 		windowsPorts, err := service.GetWindowsHostPorts()
 		if err != nil {
 			log.Println(err)
 		}
-		// calculate which port need to proxy
-		needPorts := service.GetNeededProxyPorts(linuxPorts, windowsPorts)
+		for _, p := range windowsPorts {
+			used[p] = true
+		}
+
 		// create proxy
-		for _, port := range needPorts {
-			omitted := false
-			for i, p := range storage.ProxyPool {
-				if p.Port == port.Port {
-					omitted = true
-					// update WslIp and restart proxy (if changed)
-					if p.WslIp != storage.WslIp {
-						storage.ProxyPool[i].WslIp = storage.WslIp
-						_ = p.Stop()
-					}
-					if !p.IsRunning {
-						err := p.Start()
-						if err != nil {
-							log.Printf("start proxy error,%s\n", err)
-						}
-					}
-					break
-				}
+		for _, t := range desired {
+			if used[t.Port] {
+				continue
 			}
-			if !omitted {
-				newProxy := proxy.Proxy{Port: port.Port, ProxyPort: port.ProxyPort, Type: port.Type, WslIp: storage.WslIp}
-				err := newProxy.Start()
-				if err != nil {
-					log.Printf("start proxy error,%s\n", err)
+			matched := false
+			for i := range storage.ProxyPool {
+				p := &storage.ProxyPool[i]
+				if p.TargetPort != t.Port {
+					continue
 				}
-				storage.ProxyPool = append(storage.ProxyPool, newProxy)
+				matched = true
+				if p.WslIp != t.WslIP || p.AgentPort != t.AgentPort {
+					// stale backend (agent restarted / WSL IP drifted);
+					// stop it, the cleanup below drops it and it is recreated next round
+					_ = p.Stop()
+				} else if !p.IsRunning {
+					if err := p.Start(); err != nil {
+						log.Printf("start proxy :%d error,%s\n", t.Port, err)
+					}
+				}
+				break
+			}
+			if !matched {
+				np := proxy.Proxy{TargetPort: t.Port, WslIp: t.WslIP, AgentPort: t.AgentPort}
+				if err := np.Start(); err != nil {
+					log.Printf("start proxy :%d error,%s\n", t.Port, err)
+				} else {
+					storage.ProxyPool = append(storage.ProxyPool, np)
+				}
 			}
 		}
+
 		// check for delete update
 		for i := 0; i < len(storage.ProxyPool); {
-			needToDelete := true
-			for _, port := range linuxPorts {
-				if port.Port == storage.ProxyPool[i].Port &&
-					port.ProxyPort == storage.ProxyPool[i].ProxyPort {
-					needToDelete = false
+			keep := false
+			for _, t := range desired {
+				pp := &storage.ProxyPool[i]
+				if pp.TargetPort == t.Port && pp.WslIp == t.WslIP && pp.AgentPort == t.AgentPort {
+					keep = true
 					break
 				}
 			}
-			if needToDelete {
+			if !keep {
 				_ = storage.ProxyPool[i].Stop()
 			}
 			// delete

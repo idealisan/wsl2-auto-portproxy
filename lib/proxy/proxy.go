@@ -5,38 +5,50 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 	"time"
 )
 
+// dialTimeout bounds how long a client waits for the agent channel.
+const dialTimeout = 5 * time.Second
+
+// keepAlivePeriod detects half-open connections on both legs.
+const keepAlivePeriod = 15 * time.Second
+
+// Proxy forwards one Windows listen port through the agent channel:
+// accept on :TargetPort, dial WslIp:AgentPort, send "TargetPort\n",
+// then pipe both directions. Existing connections drain on Stop;
+// only the listener is closed.
 type Proxy struct {
-	Type      string
-	Port      int64
-	ProxyPort int64
-	Listener  *net.TCPListener
-	IsRunning bool
-	WslIp     string
+	TargetPort int64
+	WslIp      string
+	AgentPort  int
+	Listener   *net.TCPListener
+	IsRunning  bool
 }
 
 func (p *Proxy) Start() error {
-	localAddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf(":%d", p.ProxyPort))
+	localAddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf(":%d", p.TargetPort))
 	if err != nil {
-		log.Printf("resove local Addr error,%s\n", err)
+		log.Printf("resolve local addr error,%s\n", err)
 		return err
 	}
 	p.Listener, err = net.ListenTCP("tcp", localAddr)
 	if err != nil {
-		log.Printf("Could not start proxy server on %d: %v\n", p.Port, err)
+		log.Printf("Could not start proxy server on %d: %v\n", p.TargetPort, err)
 		return err
 	}
-	log.Printf("new proxy start in port:%d->%d", p.ProxyPort, p.Port)
+	log.Printf("new proxy :%d -> %s:%d/%d", p.TargetPort, p.WslIp, p.AgentPort, p.TargetPort)
 	go func() {
 		for {
 			conn, err := p.Listener.AcceptTCP()
 			if err != nil {
-				log.Println("Could not accept client connection:", err)
+				if p.IsRunning {
+					log.Println("Could not accept client connection:", err)
+				}
 				break
 			}
-			go p.handleTCPConn(conn, 5000)
+			go p.handleConn(conn)
 		}
 	}()
 	p.IsRunning = true
@@ -45,49 +57,54 @@ func (p *Proxy) Start() error {
 
 func (p *Proxy) Stop() error {
 	p.IsRunning = false
-	log.Printf("proxy stop, port:%d->%d", p.ProxyPort, p.Port)
+	log.Printf("proxy stop, :%d -> %s:%d/%d", p.TargetPort, p.WslIp, p.AgentPort, p.TargetPort)
+	if p.Listener == nil {
+		return nil
+	}
 	return p.Listener.Close()
 }
 
-func (p *Proxy) handleTCPConn(conn *net.TCPConn, timeout int64) {
-	log.Printf("Client '%v' connected!\n", conn.RemoteAddr())
+func (p *Proxy) handleConn(client *net.TCPConn) {
+	defer client.Close()
+	_ = client.SetKeepAlive(true)
+	_ = client.SetKeepAlivePeriod(keepAlivePeriod)
 
-	_ = conn.SetKeepAlive(true)
-	_ = conn.SetKeepAlivePeriod(time.Second * 15)
-	targetAddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:%d", p.WslIp, p.Port))
+	agent, err := net.DialTimeout("tcp", net.JoinHostPort(p.WslIp, strconv.Itoa(p.AgentPort)), dialTimeout)
 	if err != nil {
-		log.Printf("resove remote Addr error,%s\n", err)
-	}
-	c, err := net.DialTimeout("tcp", targetAddr.String(), time.Duration(timeout)*time.Second)
-	client, _ := c.(*net.TCPConn)
-	if err != nil {
-		log.Println("Could not connect to remote server:", err)
+		log.Printf("dial agent %s:%d: %s", p.WslIp, p.AgentPort, err)
 		return
 	}
-	defer client.Close()
-	defer conn.Close()
-	log.Printf("Connection to server '%v' established!\n", client.RemoteAddr())
+	channel, ok := agent.(*net.TCPConn)
+	if !ok {
+		agent.Close()
+		return
+	}
+	defer channel.Close()
+	_ = channel.SetKeepAlive(true)
+	_ = channel.SetKeepAlivePeriod(keepAlivePeriod)
 
-	_ = client.SetKeepAlive(true)
-	_ = client.SetKeepAlivePeriod(time.Second * 15)
+	_ = channel.SetDeadline(time.Now().Add(dialTimeout))
+	if _, err := fmt.Fprintf(channel, "%d\n", p.TargetPort); err != nil {
+		log.Printf("send target port: %s", err)
+		return
+	}
+	_ = channel.SetDeadline(time.Time{})
 
-	stop := make(chan bool)
+	log.Printf("client '%v' -> agent %s:%d/%d\n", client.RemoteAddr(), p.WslIp, p.AgentPort, p.TargetPort)
+	pipe(client, channel)
+}
 
+func pipe(a, b *net.TCPConn) {
+	done := make(chan struct{}, 2)
 	go func() {
-		_, err := io.Copy(client, conn)
-		if err != nil {
-			log.Println(err)
-		}
-		stop <- true
+		_, _ = io.Copy(b, a)
+		done <- struct{}{}
 	}()
-
 	go func() {
-		_, err := io.Copy(conn, client)
-		if err != nil {
-			log.Println(err)
-		}
-		stop <- true
+		_, _ = io.Copy(a, b)
+		done <- struct{}{}
 	}()
-
-	<-stop
+	<-done
+	_ = a.Close()
+	_ = b.Close()
 }
