@@ -1,0 +1,17 @@
+[Unit]
+Description=wslpp-agent: broadcast local TCP listeners and bridge loopback for wslpp.exe
+Documentation=https://github.com/HobaiRiku/wsl2-auto-portproxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/wslpp-agent
+Restart=always
+RestartSec=3
+# The agent only needs to read /proc/net/tcp* and dial 127.0.0.1/::1;
+# it binds one random high TCP port and sends UDP broadcasts on port 1033.
+# No extra capabilities required when running as root (default here).
+
+[Install]
+WantedBy=multi-user.target

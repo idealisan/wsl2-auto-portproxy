@@ -35,6 +35,20 @@ go get https://github.com/HobaiRiku/wsl2-auto-portproxy
 ```
 and use `wsl2-auto-portproxy.exe` to start proxy
 
+#### Linux agent (recommended, enables 127.0.0.1 forwarding)
+Without the agent only ports listening on `0.0.0.0/[::]` are forwarded.
+With it, everything (including `127.0.0.1/::1`) is forwarded with zero config.
+```bash
+make build-agent
+```
+then inside WSL, install and enable it (needs systemd, i.e. `[boot] systemd=true` in `/etc/wsl.conf`):
+```bash
+sudo bash ./deploy/install-agent.sh ./dist/wslpp-agent-linux-amd64
+```
+The agent broadcasts all local TCP listening ports on UDP 1033 every 3s.
+Logs: `journalctl -u wslpp-agent -f`.
+Remove: `sudo systemctl disable --now wslpp-agent`.
+
 ## How it works
 wslpp start an interval to get IP address of the nat interface and scan all ports listening at all network in the subsystem, then use golang's `net` to start proxy direct to ports.
 
