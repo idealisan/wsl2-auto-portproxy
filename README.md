@@ -1,92 +1,84 @@
 # wsl2-auto-portProxy
-wsl2-auto-portProxy(wslpp) is a simple tool for proxying port of linux running in wsl2 (which now use a hyper-v nat network), it automatically scans the port in wls and setup a port proxy in windows host.    
 
-**Note: only port listening at [::] or 0.0.0.0 works, and will only works to  your default  wsl distribution**
+`wslpp` forwards every TCP port listening inside WSL2 — including `127.0.0.1/::1`
+— to all interfaces of the Windows host, so devices on your LAN can reach your
+WSL services. Zero config: run one agent in WSL, one proxy on Windows.
 
-## Feature
-- [x] TCP port support
-- [x] custom port proxy config, support live edit
-- [ ] web interface
-- [ ] UDP port support
+> **Security warning**: loopback-only services were never meant to leave the
+> machine. Once forwarded, they are reachable from your LAN. Only use this on
+> networks you trust.
 
+## How it works
 
-## Requirement
-~~your wsl linux must install the `net-tools` by~~ 
-```bash
-# deprecated !!!, not needed anymore
-sudo apt-get install net-tools
-```
-**Note: `net-tools` is not required anymore, use `iproute2` instead 
-(which is preinstalled by default in many linux distribution)**, 
-see [Why is net-tools deprecated](https://unix.stackexchange.com/questions/677763/why-is-net-tools-deprecated-can-i-still-use-it-without-security-issue)
+WSL2 lives behind a Hyper-V NAT with a shifting IP, and the built-in
+`wslhost.exe` forwarding only listens on Windows loopback. `wslpp` closes both
+gaps with two pieces:
 
+- `wslpp-agent` (Linux, runs in WSL): scans all local TCP listeners every 3s
+  via `/proc/net/tcp*` (any bind address), broadcasts
+  `ports + agent-port` on the fixed shared UDP port **1033**
+  (global broadcast + subnet broadcast + host unicast for NAT reliability),
+  and serves a single random TCP channel port. Each inbound connection sends
+  one `"PORT\n"` line and is bridged to `127.0.0.1:PORT` (falling back to
+  `::1`), so loopback-only services work without `--host 0.0.0.0`.
+- `wslpp` (Windows, runs on the host): listens on UDP `:1033`, learns
+  `{wslIp, ports, agentPort}` from each broadcast's source address (no `wsl`
+  CLI calls, immune to IP drift), listens on `:P` per port, and dials the
+  agent channel per client connection.
 
-## Build and install
-you can download the bin file(wslpp.exe) in [release](https://github.com/HobaiRiku/wsl2-auto-portproxy/releases).
-#### or build wslpp.exe from source
-```bash
-make build
-```
-the bin file will be store in dist/wslpp.exe    
+There are no config files. Ports already used on the local machine are
+skipped; sources silent for over 9s are dropped with their proxies.
+Protocol details live in `docs/001-linux-agent-plan.md`.
 
-#### or install with `go get`
-```bash
-go get https://github.com/HobaiRiku/wsl2-auto-portproxy
-```
-and use `wsl2-auto-portproxy.exe` to start proxy
+## Install
 
-#### Linux agent (recommended, enables 127.0.0.1 forwarding)
-Without the agent only ports listening on `0.0.0.0/[::]` are forwarded.
-With it, everything (including `127.0.0.1/::1`) is forwarded with zero config.
-```bash
-make build-agent
-```
-then inside WSL, install and enable it (needs systemd, i.e. `[boot] systemd=true` in `/etc/wsl.conf`):
+### 1. Linux agent (systemd)
+
+Download `wslpp-agent-<os>-<arch>` from
+[Releases](https://github.com/HobaiRiku/wsl2-auto-portproxy/releases),
+or build it with `make build-agent`. Then inside WSL install and enable it
+(requires systemd, i.e. `[boot] systemd=true` in `/etc/wsl.conf`):
+
 ```bash
 sudo bash ./deploy/install-agent.sh ./dist/wslpp-agent-linux-amd64
 ```
-The agent broadcasts all local TCP listening ports on UDP 1033 every 3s.
+
 Logs: `journalctl -u wslpp-agent -f`.
-Remove: `sudo systemctl disable --now wslpp-agent`.
+Remove: `sudo systemctl disable --now wslpp-agent.service`
+plus `sudo rm -f /etc/systemd/system/wslpp-agent.service /usr/local/bin/wslpp-agent`.
 
-## How it works
-wslpp start an interval to get IP address of the nat interface and scan all ports listening at all network in the subsystem, then use golang's `net` to start proxy direct to ports.
+### 2. Windows proxy
 
-## Configuration
-Support custom configuration by a json file, which must be placed in `%HOMEPATH%/.wslpp/config.json`, the `.wslpp` dir will be created automatically by wslpp when it runs, but the json file should be created by yourself.    
-Example:
-```json
-{
-  "onlyPredefined": true,
-  "predefined": {
-    "tcp": [
-      "666:22"
-    ]
-  },
-  "ignore": {
-    "tcp": [
-      445
-    ]
-  }
-}
+Download `wslpp-windows-<arch>.exe` from
+[Releases](https://github.com/HobaiRiku/wsl2-auto-portproxy/releases)
+and run it (add it to startup for always-on forwarding). Logs go to stdout.
+
+## Releases
+
+A GitHub Actions workflow builds and publishes on every `v*` tag:
+`wslpp` and `wslpp-agent` for windows / linux / darwin × amd64 / arm64
+(12 files, see `.github/workflows/release.yml`).
+
+## Develop
+
+```bash
+make build        # wslpp.exe (windows/amd64) -> dist/
+make build-agent  # agent (linux amd64+arm64) -> dist/
+make build-all    # both
+go test ./...     # unit tests (protocol, /proc and netstat parsers)
 ```
-* onlyPredefined: If `true`, will only start port defined in `predefined` field.
-* predefined: Define the custom port to proxy, "666:22" means `windows(666)->linux(22)`, if undefined, port in windows will follow the same of linux. Must be a string array in the sub field name `tcp`.
-* ignore: If defined, will ignore the port in linux. Must be a number array in the sub field name `tcp`. 
 
-**Note: If port is already use by another program in windows, the port will be omitted**
+## Notes
 
-## About `wslhost.exe`
-Now Microsoft will forward ports in linux by `wslhost.exe` when `.wslconfig` includes `localhostForwarding=true` (which is ture by default), see [wsl-config](https://learn.microsoft.com/en-us/windows/wsl/wsl-config). But, all those ports will only listen at local network on windows host, which means you can't access them from other devices in the same network. 
-For now, `wslpp` will still open a same port listening at all interfaces, but if you don't need network access at this, you probably don't need `wslpp` at all, `wslhost.exe` is enough.
-## Another solution for wsl2 port forwarding - `WSLHostPatcher` 
-Fond a way to inject `wslhost.exe` to forward ports to all interfaces, 
-[WSLHostPatcher](https://github.com/CzBiX/WSLHostPatcher).    
-By `WSLHostPatcher` you can forward ports to all interfaces by `wslhost.exe` more gracefully and efficiently.
-
-## Security issue
-It is unsafe to open ports in windows host to the internet (maybe the main reason why wslhost.exe don't do this), so when start port at all interfaces, be sure you know what you are doing.
+- Microsoft forwards WSL ports via `wslhost.exe` when
+  `localhostForwarding=true` (default), but only on host loopback — that is
+  exactly the gap `wslpp` fills. See
+  [wsl-config](https://learn.microsoft.com/en-us/windows/wsl/wsl-config).
+- [WSLHostPatcher](https://github.com/CzBiX/WSLHostPatcher) patches
+  `wslhost.exe` instead — a more efficient alternative if you only need
+  Windows-local access.
+- UDP forwarding is not implemented yet.
 
 ## License
-MIT
 
+MIT

@@ -33,9 +33,9 @@ func main() {
 	for {
 		desired := wdiscovery.Snapshot()
 
-		// ports already taken on Windows are omitted
+		// ports already used locally are omitted
 		used := map[int64]bool{}
-		windowsPorts, err := service.GetWindowsHostPorts()
+		windowsPorts, err := service.GetLocalUsedPorts()
 		if err != nil {
 			log.Println(err)
 		}
