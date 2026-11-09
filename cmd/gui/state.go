@@ -23,7 +23,7 @@ type rowView struct {
 	Port       int64  // port listening inside WSL
 	ListenPort int64  // port actually bound on Windows (0 when not forwarding)
 	Proc       string
-	WslLabel   string // which WSL environment this row came from
+	WslIP      string // shown together with the port, to tell agents apart
 	Checked    bool
 	Enabled    bool
 	Running    bool
@@ -101,7 +101,7 @@ func (a *guiApp) snapshotLocked() snapshot {
 			Port:       t.Port,
 			ListenPort: a.running[id],
 			Proc:       t.Proc,
-			WslLabel:   fmt.Sprintf("%s:%d", t.WslIP, t.AgentPort),
+			WslIP:      t.WslIP,
 			Checked:    a.chosen.Has(id),
 			Enabled:    a.enabled[id],
 			Running:    a.running[id] != 0,
@@ -144,8 +144,8 @@ func (a *guiApp) applyState(desired []wdiscovery.Target, running map[string]int6
 	case !online:
 		a.message = "等待 WSL agent 广播…（请确认 wslpp-agent 正在 WSL 内运行）"
 	default:
-		a.message = fmt.Sprintf("发现 %d 个监听端口（%d 个 WSL 环境），已转发 %d 个",
-			len(desired), agentCount, len(running))
+		a.message = fmt.Sprintf("发现 %d 个监听端口，已转发 %d 个",
+			len(desired), len(running))
 	}
 	a.mu.Unlock()
 	a.refresh()
@@ -253,9 +253,11 @@ func compareRows(a, b rowView, col string) int {
 	case "select":
 		return cmp.Compare(boolKey(a.Checked), boolKey(b.Checked))
 	case "port":
+		// The column shows "IP:port", so sort by IP first.
+		if c := cmp.Compare(a.WslIP, b.WslIP); c != 0 {
+			return c
+		}
 		return cmp.Compare(a.Port, b.Port)
-	case "agent":
-		return cmp.Compare(a.WslLabel, b.WslLabel)
 	case "proc":
 		return cmp.Compare(a.Proc, b.Proc)
 	case "access":

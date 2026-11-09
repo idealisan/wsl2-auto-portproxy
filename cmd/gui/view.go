@@ -19,11 +19,11 @@ func (a *guiApp) view(c *ui.Context) {
 
 	// A Table gives us click-to-sort headers, draggable column edges and
 	// Ctrl/Cmd-click, Shift-click and Ctrl+A multi-selection. IDs match the
-	// switch in compareRows.
+	// switch in compareRows. The WSL IP is part of the port column, so there
+	// is no separate column just to tell agents apart.
 	cols := []ui.TableColumn{
 		{Title: "选择", ID: "select", Width: 64, MinWidth: 56, MaxWidth: 96, Sortable: true},
-		{Title: "WSL 端口", ID: "port", Width: 88, MinWidth: 70, MaxWidth: 160, Sortable: true},
-		{Title: "WSL 环境", ID: "agent", Width: 150, MinWidth: 110, MaxWidth: 240, Sortable: true},
+		{Title: "WSL 端口", ID: "port", Width: 170, MinWidth: 130, MaxWidth: 240, Sortable: true},
 		{Title: "进程 / 服务", ID: "proc", MinWidth: 140, Sortable: true},
 		{Title: "访问端口", ID: "access", Width: 96, MinWidth: 80, MaxWidth: 160, Sortable: true},
 		{Title: "状态", ID: "status", Width: 84, MinWidth: 70, MaxWidth: 140, Sortable: true},
@@ -55,14 +55,12 @@ func (a *guiApp) view(c *ui.Context) {
 				cb := ui.Checkbox(c.Key(r.ID), &checked, "")
 				cb.OnChange(func() { a.setChecked(r.ID, checked) })
 			case 1:
-				ui.Textf(c, "%d", r.Port)
+				ui.Textf(c, "%s:%d", r.WslIP, r.Port).SingleLine()
 			case 2:
-				ui.Text(c, r.WslLabel).SingleLine()
-			case 3:
 				// No SingleLine(): long process names wrap and the row grows
 				// instead of being clipped.
 				ui.Text(c, orDash(r.Proc))
-			case 4:
+			case 3:
 				if !r.Running {
 					ui.Text(c, "-").TextColor(c.Theme().TextMuted)
 					break
@@ -76,9 +74,9 @@ func (a *guiApp) view(c *ui.Context) {
 						t.Bold()
 					}
 				})
-			case 5:
+			case 4:
 				ui.Text(c, rowStatus(r))
-			case 6:
+			case 5:
 				label := "启动"
 				if r.Enabled {
 					label = "停止"

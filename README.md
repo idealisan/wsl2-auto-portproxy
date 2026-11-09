@@ -80,8 +80,8 @@ The GUI lists every WSL listening port with its process name and forwards
   older agent leaves the column empty.
 
 Install an agent in every WSL distro you want to reach. All of them appear in
-the same GUI; the **WSL 环境** column shows which one a row came from, even
-when several distros share one IP or listen on the same port.
+the same GUI; the **WSL 端口** column shows `IP:port`, so rows from different
+distros are distinguishable even when they listen on the same port.
 
 The GUI and the headless `wslpp.exe` are separate programs — run one or the
 other, not both (they would compete for the same host ports).
