@@ -16,14 +16,14 @@ import (
 // any control is built. The list is virtualized, so per-row state must live
 // in the model rather than in the row callback.
 type rowView struct {
-	Port      int64
-	Proc      string
-	WSLIP     string
-	AgentPort int
-	Checked   bool
-	Enabled   bool
-	Running   bool
-	Used      bool
+	Port       int64 // port listening inside WSL
+	ListenPort int64 // port actually bound on Windows (0 when not forwarding)
+	Proc       string
+	WSLIP      string
+	AgentPort  int
+	Checked    bool
+	Enabled    bool
+	Running    bool
 }
 
 type snapshot struct {
@@ -43,8 +43,7 @@ type guiApp struct {
 	targets map[int64]wdiscovery.Target // latest broadcast, keyed by port
 	checked map[int64]bool              // multi-selection
 	enabled map[int64]bool              // ports the user asked to forward
-	running map[int64]bool              // ports whose listener is up
-	used    map[int64]bool              // ports already bound on Windows
+	running map[int64]int64             // WSL port -> actual Windows listen port
 	online  bool
 	wslIP   string
 	message string
@@ -56,8 +55,7 @@ func newApp() *guiApp {
 		targets:   map[int64]wdiscovery.Target{},
 		checked:   map[int64]bool{},
 		enabled:   map[int64]bool{},
-		running:   map[int64]bool{},
-		used:      map[int64]bool{},
+		running:   map[int64]int64{},
 		message:   "等待 WSL agent 广播…（请确认 wslpp-agent 正在 WSL 内运行）",
 	}
 }
@@ -88,14 +86,14 @@ func (a *guiApp) snapshotLocked() snapshot {
 	for _, p := range ports {
 		t := a.targets[p]
 		r := rowView{
-			Port:      p,
-			Proc:      t.Proc,
-			WSLIP:     t.WslIP,
-			AgentPort: t.AgentPort,
-			Checked:   a.checked[p],
-			Enabled:   a.enabled[p],
-			Running:   a.running[p],
-			Used:      a.used[p],
+			Port:       p,
+			ListenPort: a.running[p],
+			Proc:       t.Proc,
+			WSLIP:      t.WslIP,
+			AgentPort:  t.AgentPort,
+			Checked:    a.checked[p],
+			Enabled:    a.enabled[p],
+			Running:    a.running[p] != 0,
 		}
 		if r.Running {
 			forwarded++
@@ -113,14 +111,13 @@ func (a *guiApp) snapshotLocked() snapshot {
 }
 
 // applyState publishes the result of a reconcile pass and refreshes the view.
-func (a *guiApp) applyState(desired []wdiscovery.Target, used, running map[int64]bool,
+func (a *guiApp) applyState(desired []wdiscovery.Target, running map[int64]int64,
 	online bool, wslIP string, errs []string) {
 	a.mu.Lock()
 	a.targets = make(map[int64]wdiscovery.Target, len(desired))
 	for _, t := range desired {
 		a.targets[t.Port] = t
 	}
-	a.used = used
 	a.running = running
 	a.online = online
 	a.wslIP = wslIP
@@ -182,7 +179,7 @@ func (a *guiApp) selectAll(on bool) {
 func (a *guiApp) applyChecked(on bool) {
 	a.mu.Lock()
 	for p := range a.checked {
-		if _, ok := a.targets[p]; !ok || a.used[p] {
+		if _, ok := a.targets[p]; !ok {
 			continue
 		}
 		if on {

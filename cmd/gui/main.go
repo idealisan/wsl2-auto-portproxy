@@ -13,7 +13,6 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/HobaiRiku/wsl2-auto-portproxy/lib/proxy"
-	"github.com/HobaiRiku/wsl2-auto-portproxy/lib/service"
 	"github.com/HobaiRiku/wsl2-auto-portproxy/lib/storage"
 	"github.com/HobaiRiku/wsl2-auto-portproxy/lib/wdiscovery"
 )
@@ -56,16 +55,7 @@ func (a *guiApp) reconcileLoop() {
 // user enabled. It is the sole writer of storage.ProxyPool in this program.
 func (a *guiApp) reconcile() {
 	desired := wdiscovery.Snapshot()
-
-	used := map[int64]bool{}
 	var errs []string
-	windowsPorts, err := service.GetLocalUsedPorts()
-	if err != nil {
-		errs = append(errs, "检测本机端口失败: "+err.Error())
-	}
-	for _, p := range windowsPorts {
-		used[p] = true
-	}
 
 	a.mu.Lock()
 	enabled := make(map[int64]bool, len(a.enabled))
@@ -76,7 +66,7 @@ func (a *guiApp) reconcile() {
 
 	should := make([]wdiscovery.Target, 0, len(desired))
 	for _, t := range desired {
-		if used[t.Port] || !enabled[t.Port] {
+		if !enabled[t.Port] {
 			continue
 		}
 		should = append(should, t)
@@ -131,10 +121,10 @@ func (a *guiApp) reconcile() {
 		}
 	}
 
-	running := map[int64]bool{}
+	running := map[int64]int64{} // WSL port -> actual Windows listen port
 	for i := range storage.ProxyPool {
 		if storage.ProxyPool[i].IsRunning {
-			running[storage.ProxyPool[i].TargetPort] = true
+			running[storage.ProxyPool[i].TargetPort] = storage.ProxyPool[i].ListenPort
 		}
 	}
 	storage.PoolMu.Unlock()
@@ -144,5 +134,5 @@ func (a *guiApp) reconcile() {
 	if online {
 		wslIP = desired[0].WslIP
 	}
-	a.applyState(desired, used, running, online, wslIP, errs)
+	a.applyState(desired, running, online, wslIP, errs)
 }

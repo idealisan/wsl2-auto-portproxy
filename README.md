@@ -27,9 +27,11 @@ gaps with two pieces:
   address (no `wsl` CLI calls, immune to IP drift), listens on `:P` per port,
   and dials the agent channel per client connection.
 
-There are no config files. Ports already used on the local machine are
-skipped; sources silent for over 9s are dropped with their proxies.
-Protocol details live in `docs/001-linux-agent-plan.md`.
+There are no config files. If a WSL port is already bound on the Windows
+host, the proxy uses a free ephemeral port instead and the GUI shows the
+actual mapping; sources silent for over 9s are dropped with their proxies.
+No external command is used to probe ports — `net.ListenTCP` itself is the
+check. Protocol details live in `docs/001-linux-agent-plan.md`.
 
 ## Install
 
@@ -62,7 +64,9 @@ and run it. It lists every WSL listening port together with its process name
 and forwards **nothing** until you choose: tick rows and press
 **启动所选** / **停止所选**, or use each row's **启动/停止** button. Process
 names require the new agent from step 1; with an older agent the process
-column shows `-`. Ports already bound on Windows are marked and disabled.
+column shows `-`. When a WSL port is already bound on Windows, the proxy
+transparently picks a free random port; the 访问端口 column shows the address
+to use from your LAN (bold when it differs from the WSL port).
 
 The GUI and the headless `wslpp.exe` are separate programs — run one or the
 other, not both (they would compete for the same Windows ports).
@@ -86,7 +90,7 @@ make build        # wslpp.exe (windows/amd64) -> dist/
 make build-agent  # agent (linux amd64+arm64) -> dist/
 make build-gui    # wslpp-gui.exe (windows/amd64) -> dist/
 make build-all    # all three
-go test ./...     # unit tests (protocol, /proc inodes, process names, netstat parsers)
+go test ./...     # unit tests (protocol, /proc inodes, process names, proxy fallback)
 ```
 
 ## Notes

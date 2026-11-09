@@ -28,13 +28,16 @@ func (a *guiApp) view(c *ui.Context) {
 			}
 		})
 		ui.Text(c, snap.message).TextColor(c.Theme().TextMuted).SingleLine()
+		ui.Text(c, "本机端口被占用时会自动改用随机端口，请按「访问端口」列的地址从局域网访问。").
+			TextColor(c.Theme().TextMuted).SingleLine()
 
 		// Column headers, kept in the same widths as the rows below.
 		ui.Row(c).Gap(8).Padding(6, 8).Children(func() {
 			ui.Text(c, "选").Width(28)
-			ui.Text(c, "端口").Width(70)
+			ui.Text(c, "WSL 端口").Width(70)
 			ui.Text(c, "进程 / 服务").Grow(1)
-			ui.Text(c, "状态").Width(90)
+			ui.Text(c, "访问端口").Width(90)
+			ui.Text(c, "状态").Width(70)
 			ui.Text(c, "操作").Width(64)
 		})
 
@@ -46,18 +49,23 @@ func (a *guiApp) view(c *ui.Context) {
 
 				ui.Textf(c, "%d", r.Port).Width(70)
 				ui.Text(c, orDash(r.Proc)).Grow(1).SingleLine()
-				ui.Text(c, rowStatus(r)).Width(90)
+
+				if r.Running {
+					portText := ui.Textf(c, ":%d", r.ListenPort).Width(90)
+					if r.ListenPort != r.Port {
+						// A different port means the host one was busy.
+						portText.Bold()
+					}
+				} else {
+					ui.Text(c, "-").Width(90).TextColor(c.Theme().TextMuted)
+				}
+				ui.Text(c, rowStatus(r)).Width(70)
 
 				label := "启动"
 				if r.Enabled {
 					label = "停止"
 				}
-				btn := ui.Button(c, label).Width(64)
-				if r.Used {
-					btn.Disabled(true)
-				} else {
-					btn.OnClick(func() { a.toggle(r.Port) })
-				}
+				ui.Button(c, label).Width(64).OnClick(func() { a.toggle(r.Port) })
 			})
 		}).Grow(1).Children(func() {
 			if len(snap.rows) == 0 {
@@ -88,8 +96,6 @@ func orDash(s string) string {
 
 func rowStatus(r rowView) string {
 	switch {
-	case r.Used:
-		return "本机占用"
 	case r.Running:
 		return "已转发"
 	case r.Enabled:

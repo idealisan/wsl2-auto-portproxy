@@ -16,11 +16,15 @@ const dialTimeout = 5 * time.Second
 const keepAlivePeriod = 15 * time.Second
 
 // Proxy forwards one Windows listen port through the agent channel:
-// accept on :TargetPort, dial WslIp:AgentPort, send "TargetPort\n",
-// then pipe both directions. Existing connections drain on Stop;
-// only the listener is closed.
+// accept on :ListenPort, dial WslIp:AgentPort, send "TargetPort\n",
+// then pipe both directions. ListenPort normally equals TargetPort, but when
+// that port is already bound on the host Start picks a free ephemeral port
+// instead, so a conflict never disables the forward. The GUI shows the
+// actual mapping. Existing connections drain on Stop; only the listener is
+// closed.
 type Proxy struct {
-	TargetPort int64
+	TargetPort int64 // port inside WSL, sent to the agent
+	ListenPort int64 // port bound on Windows (0 -> start with TargetPort)
 	WslIp      string
 	AgentPort  int
 	Listener   *net.TCPListener
@@ -28,17 +32,25 @@ type Proxy struct {
 }
 
 func (p *Proxy) Start() error {
-	localAddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf(":%d", p.TargetPort))
-	if err != nil {
-		log.Printf("resolve local addr error,%s\n", err)
-		return err
+	if p.ListenPort == 0 {
+		p.ListenPort = p.TargetPort
 	}
-	p.Listener, err = net.ListenTCP("tcp", localAddr)
+	ln, err := net.ListenTCP("tcp", &net.TCPAddr{Port: int(p.ListenPort)})
 	if err != nil {
-		log.Printf("Could not start proxy server on %d: %v\n", p.TargetPort, err)
-		return err
+		// Something on this machine already owns the port. Rather than give
+		// up, let the OS assign a free one; clients reach WSL :TargetPort at
+		// WindowsIP:ListenPort.
+		requested := p.ListenPort
+		ln, err = net.ListenTCP("tcp", &net.TCPAddr{Port: 0})
+		if err != nil {
+			log.Printf("Could not start proxy for WSL :%d: %v\n", p.TargetPort, err)
+			return err
+		}
+		p.ListenPort = int64(ln.Addr().(*net.TCPAddr).Port)
+		log.Printf(":%d busy, forwarding WSL :%d on :%d instead", requested, p.TargetPort, p.ListenPort)
 	}
-	log.Printf("new proxy :%d -> %s:%d/%d", p.TargetPort, p.WslIp, p.AgentPort, p.TargetPort)
+	p.Listener = ln
+	log.Printf("new proxy :%d -> %s:%d/%d", p.ListenPort, p.WslIp, p.AgentPort, p.TargetPort)
 	go func() {
 		for {
 			conn, err := p.Listener.AcceptTCP()
@@ -57,7 +69,7 @@ func (p *Proxy) Start() error {
 
 func (p *Proxy) Stop() error {
 	p.IsRunning = false
-	log.Printf("proxy stop, :%d -> %s:%d/%d", p.TargetPort, p.WslIp, p.AgentPort, p.TargetPort)
+	log.Printf("proxy stop, :%d -> %s:%d/%d", p.ListenPort, p.WslIp, p.AgentPort, p.TargetPort)
 	if p.Listener == nil {
 		return nil
 	}

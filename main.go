@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/HobaiRiku/wsl2-auto-portproxy/lib/proxy"
-	"github.com/HobaiRiku/wsl2-auto-portproxy/lib/service"
 	"github.com/HobaiRiku/wsl2-auto-portproxy/lib/storage"
 	"github.com/HobaiRiku/wsl2-auto-portproxy/lib/wdiscovery"
 )
@@ -33,21 +32,9 @@ func main() {
 	for {
 		desired := wdiscovery.Snapshot()
 
-		// ports already used locally are omitted
-		used := map[int64]bool{}
-		windowsPorts, err := service.GetLocalUsedPorts()
-		if err != nil {
-			log.Println(err)
-		}
-		for _, p := range windowsPorts {
-			used[p] = true
-		}
-
-		// create proxy
+		// create proxy. A port already bound on this host is handled inside
+		// Proxy.Start, which falls back to a free ephemeral port.
 		for _, t := range desired {
-			if used[t.Port] {
-				continue
-			}
 			matched := false
 			for i := range storage.ProxyPool {
 				p := &storage.ProxyPool[i]
