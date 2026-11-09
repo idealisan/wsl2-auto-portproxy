@@ -40,6 +40,57 @@ func Build(ports []int64, agentPort int) string {
 	return b.String()
 }
 
+// BuildWithProcs renders a broadcast payload that also carries the process
+// name of each port. The procs section is appended AFTER the agent port value,
+// and every line in it starts with letters, so an older Parse (which ignores
+// lines it cannot Atoi) still sees exactly the same ports and agent port.
+func BuildWithProcs(ports []int64, agentPort int, procs map[int64]string) string {
+	var b strings.Builder
+	b.WriteString(Build(ports, agentPort))
+	b.WriteString("procs\n")
+
+	sorted := append([]int64(nil), ports...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	seen := map[int64]bool{}
+	for _, p := range sorted {
+		if seen[p] || p == int64(agentPort) {
+			continue
+		}
+		seen[p] = true
+		name := strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ").Replace(procs[p]))
+		if name == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "proc %d %s\n", p, name)
+	}
+	return b.String()
+}
+
+// ParseProcs extracts the port -> process name map from a broadcast payload.
+// Lines that are not "proc <port> <name>" are ignored, so a payload from an
+// older agent (with no procs section) yields an empty map.
+func ParseProcs(payload string) map[int64]string {
+	out := map[int64]string{}
+	for _, line := range strings.Split(payload, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "proc ") {
+			continue
+		}
+		parts := strings.SplitN(line, " ", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		port, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil || port <= 0 || port > 65535 {
+			continue
+		}
+		if name := strings.TrimSpace(parts[2]); name != "" {
+			out[port] = name
+		}
+	}
+	return out
+}
+
 // Parse parses a broadcast payload. Unknown lines are ignored for forward compatibility.
 func Parse(payload string) (ports []int64, agentPort int, err error) {
 	seenPorts := map[int64]bool{}

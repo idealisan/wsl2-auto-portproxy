@@ -16,16 +16,20 @@ import (
 // Expiry drops a source that stopped broadcasting (3 missed 3s rounds).
 const Expiry = 9 * time.Second
 
-// Target is one Windows listen port and where to forward it.
+// Target is one Windows listen port and where to forward it. Proc is the
+// process name reported by the agent, empty for older agents that do not
+// broadcast it.
 type Target struct {
 	Port      int64
 	WslIP     string
 	AgentPort int
+	Proc      string
 }
 
 type source struct {
 	ports     []int64
 	agentPort int
+	procs     map[int64]string
 	lastSeen  time.Time
 }
 
@@ -60,14 +64,20 @@ func serve(pc net.PacketConn) {
 		if !ok {
 			continue
 		}
-		ports, agentPort, err := broadcast.Parse(string(buf[:n]))
+		payload := string(buf[:n])
+		ports, agentPort, err := broadcast.Parse(payload)
 		if err != nil {
 			log.Printf("bad broadcast from %s: %s", udpAddr.IP.String(), err)
 			continue
 		}
 		src := udpAddr.IP.String()
 		mu.Lock()
-		sources[src] = &source{ports: ports, agentPort: agentPort, lastSeen: time.Now()}
+		sources[src] = &source{
+			ports:     ports,
+			agentPort: agentPort,
+			procs:     broadcast.ParseProcs(payload),
+			lastSeen:  time.Now(),
+		}
 		mu.Unlock()
 		log.Printf("discover %s: ports=%v agentPort=%d", src, ports, agentPort)
 	}
@@ -99,7 +109,7 @@ func Snapshot() []Target {
 				continue
 			}
 			seen[p] = true
-			out = append(out, Target{Port: p, WslIP: k, AgentPort: s.agentPort})
+			out = append(out, Target{Port: p, WslIP: k, AgentPort: s.agentPort, Proc: s.procs[p]})
 		}
 	}
 	return out

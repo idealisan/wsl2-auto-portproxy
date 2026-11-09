@@ -1,6 +1,6 @@
-// wslpp-agent runs inside WSL: it scans all local TCP listening ports,
-// broadcasts them on UDP 1033, and serves the single random-port TCP
-// channel that Windows forwards through.
+// wslpp-agent runs inside WSL: it scans all local TCP listening ports and
+// their owning process names, broadcasts them on UDP 1033, and serves the
+// single random-port TCP channel that Windows forwards through.
 package main
 
 import (
@@ -45,17 +45,19 @@ func main() {
 	}
 
 	go acceptLoop(ln)
+	resolver := discover.NewProcResolver()
 
 	for {
-		announce(pc, agentPort)
+		announce(pc, agentPort, resolver)
 		time.Sleep(broadcastInterval)
 	}
 }
 
-func announce(pc net.PacketConn, agentPort int) {
+func announce(pc net.PacketConn, agentPort int, resolver *discover.ProcResolver) {
 	exclude := map[int]bool{agentPort: true}
 	ports := discover.LocalTCPPorts(exclude)
-	payload := broadcast.Build(ports, agentPort)
+	procs := resolver.Resolve(discover.PortInodes())
+	payload := broadcast.BuildWithProcs(ports, agentPort, procs)
 	for _, dst := range broadcast.Targets() {
 		if _, err := pc.WriteTo([]byte(payload), dst); err != nil {
 			log.Printf("broadcast to %s failed: %s", dst.String(), err)

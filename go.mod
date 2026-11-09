@@ -1,5 +1,5 @@
 module github.com/HobaiRiku/wsl2-auto-portproxy
 
-go 1.14
+go 1.27.3
 
-require github.com/pkg/errors v0.9.1
+require github.com/egoist/mygo v0.8.3

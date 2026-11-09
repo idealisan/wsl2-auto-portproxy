@@ -15,16 +15,17 @@ WSL2 lives behind a Hyper-V NAT with a shifting IP, and the built-in
 gaps with two pieces:
 
 - `wslpp-agent` (Linux, runs in WSL): scans all local TCP listeners every 3s
-  via `/proc/net/tcp*` (any bind address), broadcasts
-  `ports + agent-port` on the fixed shared UDP port **1033**
+  via `/proc/net/tcp*` (any bind address), resolves each listener's owning
+  process from `/proc/<pid>/fd` + `/proc/<pid>/comm`, then broadcasts
+  `ports + agent-port + process names` on the fixed shared UDP port **1033**
   (global broadcast + subnet broadcast + host unicast for NAT reliability),
   and serves a single random TCP channel port. Each inbound connection sends
   one `"PORT\n"` line and is bridged to `127.0.0.1:PORT` (falling back to
   `::1`), so loopback-only services work without `--host 0.0.0.0`.
 - `wslpp` (Windows, runs on the host): listens on UDP `:1033`, learns
-  `{wslIp, ports, agentPort}` from each broadcast's source address (no `wsl`
-  CLI calls, immune to IP drift), listens on `:P` per port, and dials the
-  agent channel per client connection.
+  `{wslIp, ports, agentPort, process names}` from each broadcast's source
+  address (no `wsl` CLI calls, immune to IP drift), listens on `:P` per port,
+  and dials the agent channel per client connection.
 
 There are no config files. Ports already used on the local machine are
 skipped; sources silent for over 9s are dropped with their proxies.
@@ -53,19 +54,39 @@ Download `wslpp-windows-<arch>.exe` from
 [Releases](https://github.com/HobaiRiku/wsl2-auto-portproxy/releases)
 and run it (add it to startup for always-on forwarding). Logs go to stdout.
 
+### 3. Windows GUI (choose ports by hand)
+
+Download `wslpp-gui-windows-<arch>.exe` from
+[Releases](https://github.com/HobaiRiku/wsl2-auto-portproxy/releases)
+and run it. It lists every WSL listening port together with its process name
+and forwards **nothing** until you choose: tick rows and press
+**启动所选** / **停止所选**, or use each row's **启动/停止** button. Process
+names require the new agent from step 1; with an older agent the process
+column shows `-`. Ports already bound on Windows are marked and disabled.
+
+The GUI and the headless `wslpp.exe` are separate programs — run one or the
+other, not both (they would compete for the same Windows ports).
+
+> The same security warning applies: forwarding a loopback-only service makes
+> it reachable from your LAN.
+
 ## Releases
 
 A GitHub Actions workflow builds and publishes on every `v*` tag:
-`wslpp` and `wslpp-agent` for windows / linux / darwin × amd64 / arm64
-(12 files, see `.github/workflows/release.yml`).
+`wslpp` and `wslpp-agent` for windows / linux / darwin × amd64 / arm64,
+plus `wslpp-gui` for windows × amd64 / arm64
+(14 files, see `.github/workflows/release.yml`).
 
 ## Develop
+
+Development requires Go 1.27.3+ (the GUI depends on mygo v0.8.3).
 
 ```bash
 make build        # wslpp.exe (windows/amd64) -> dist/
 make build-agent  # agent (linux amd64+arm64) -> dist/
-make build-all    # both
-go test ./...     # unit tests (protocol, /proc and netstat parsers)
+make build-gui    # wslpp-gui.exe (windows/amd64) -> dist/
+make build-all    # all three
+go test ./...     # unit tests (protocol, /proc inodes, process names, netstat parsers)
 ```
 
 ## Notes

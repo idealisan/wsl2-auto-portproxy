@@ -1,4 +1,4 @@
-.PHONY:build build-agent build-all clean test dev
+.PHONY:build build-agent build-gui build-all clean test dev
 # Go parameters
 GOCMD=go
 GORUN=$(GOCMD) run
@@ -15,6 +15,8 @@ VERSION := $(shell git describe --always --tags  |sed -e "s/^v//")
 
 # LDFLAGS
 LDFLAGS = -ldflags "-s -w -X main.version=$(VERSION)"
+# GUI is a windowsgui binary: no console window, mygo inspector disabled.
+GUI_LDFLAGS = -ldflags "-s -w -H=windowsgui -X github.com/egoist/mygo.production=1 -X main.version=$(VERSION)"
 
 
 build: mod-tidy
@@ -27,7 +29,11 @@ build-agent:
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBUILD) \
 	 $(LDFLAGS) -o ./dist/wslpp-agent-linux-arm64 ./cmd/agent
 
-build-all: build build-agent
+build-gui: mod-tidy
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GOBUILD) -trimpath -tags mygo_noinspector \
+	 $(GUI_LDFLAGS) -o ./dist/wslpp-gui.exe ./cmd/gui
+
+build-all: build build-agent build-gui
 
 test:
 	$(GOTEST) -v ./...
