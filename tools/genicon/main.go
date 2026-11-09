@@ -196,13 +196,14 @@ func makeICO(pngs map[int][]byte, sizes []int) []byte {
 // Go linker embeds it into the exe automatically — no rc/windres tool and no
 // cgo. This is the same layout mygo's own builder uses.
 func makeSyso(pngs map[int][]byte, sizes []int, arch string) []byte {
-	machine, relocation, ok := map[string]struct{ m, r uint16 }{
+	archInfo, ok := map[string]struct{ m, r uint16 }{
 		"amd64": {0x8664, 0x0003}, // IMAGE_REL_AMD64_ADDR32NB
 		"arm64": {0xAA64, 0x0002}, // IMAGE_REL_ARM64_ADDR32NB
 	}[arch]
 	if !ok {
 		panic("unsupported arch: " + arch)
 	}
+	machine, relocation := archInfo.m, archInfo.r
 
 	const rtIcon, rtGroupIcon = 3, 14
 	var iconSizes []int
