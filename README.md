@@ -28,11 +28,9 @@ gaps with two pieces:
   address (no `wsl` CLI calls, immune to IP drift), listens on `:P` per port,
   and dials the agent channel per client connection.
 
-There are no config files. If a WSL port is already bound on the Windows
-host, the proxy uses a free ephemeral port instead and the GUI shows the
-actual mapping; sources silent for over 9s are dropped with their proxies.
-No external command is used to probe ports — `net.ListenTCP` itself is the
-check. Protocol details live in `docs/001-linux-agent-plan.md`.
+There are no config files. Sources silent for over 9s are dropped with
+their proxies. Port availability is checked by binding, with no external
+command. Protocol details live in `docs/001-linux-agent-plan.md`.
 
 ## Install
 
@@ -64,24 +62,26 @@ Download `wslpp-gui-windows-<arch>.exe` for Windows, or
 `wslpp-gui.app` into Applications). The macOS bundle is unsigned, so on
 first launch use right-click → Open, or run
 `xattr -d com.apple.quarantine wslpp-gui.app`. Both builds share the same
-native mygo UI; the icon is drawn by `tools/genicon` (two arrows for ports
-forwarded in both directions) and embedded in the macOS bundle.
+native mygo UI. The icon is drawn by `tools/genicon` (two arrows for ports
+forwarded in both directions) and embedded in both the Windows exe and the
+macOS bundle.
 
 The GUI lists every WSL listening port with its process name and forwards
 **nothing** until you choose:
 
 - tick rows and press **启动所选** / **停止所选**, use each row's
   **启动/停止** button, or use **全部启动** / **全部停止** for every port.
-  **全选** / **全不选** control the tick boxes.
-- click any column header to sort; drag a header's edge to resize that
-  column, or drag the header itself to reorder columns.
-- the **访问端口** column shows the actual host port as a plain number.
-  Click it to copy to the clipboard, then paste after `WindowsIP:`. When a
-  WSL port is already bound on the host, a free random port is used instead
-  and shown in bold.
+  **全选** / **全不选** control the tick boxes; Ctrl/Cmd-click and Shift-click
+  select multiple rows directly.
+- the **访问端口** column shows the host port as a plain number. Click it to
+  copy to the clipboard, then paste after `WindowsIP:`.
 - process names come from the new agent in step 1 and are read from
   `/proc/<pid>/exe`, so long names are not truncated to 15 characters; an
   older agent leaves the column empty.
+
+Install an agent in every WSL distro you want to reach. All of them appear in
+the same GUI; the **WSL 环境** column shows which one a row came from, even
+when several distros share one IP or listen on the same port.
 
 The GUI and the headless `wslpp.exe` are separate programs — run one or the
 other, not both (they would compete for the same host ports).
@@ -95,7 +95,10 @@ A GitHub Actions workflow builds and publishes on every `v*` tag:
 `wslpp` and `wslpp-agent` for windows / linux / darwin × amd64 / arm64,
 `wslpp-gui-windows-*.exe` for Windows, `wslpp-gui-darwin-*.app.zip` for
 macOS, and `wslpp-gui.ico`
-(17 files, see `.github/workflows/release.yml`).
+(17 files, see `.github/workflows/release.yml`). Every binary is built with
+`-trimpath -buildvcs=false -s -w` to strip symbols, DWARF and local paths;
+no packing, compression or obfuscation is used, which antivirus products
+often flag.
 
 ## Develop
 

@@ -5,6 +5,9 @@ name: release
 # each producing wslpp and wslpp-agent = 12 release files. The GUI is built
 # for windows and darwin: two .exe, two macOS .app.zip bundles and one .ico,
 # for 17 files total.
+# All binaries use -trimpath -buildvcs=false -ldflags "-s -w": strip the
+# symbol table and DWARF and drop local paths to keep them small. No packing,
+# compression or obfuscation, which antivirus products flag as suspicious.
 on:
   push:
     tags:
@@ -54,8 +57,10 @@ jobs:
           EXT=""
           if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
           mkdir -p dist
-          go build -ldflags "$LDFLAGS" -o "dist/wslpp-$GOOS-$GOARCH$EXT" .
-          go build -ldflags "$LDFLAGS" -o "dist/wslpp-agent-$GOOS-$GOARCH$EXT" ./cmd/agent
+          go build -trimpath -buildvcs=false -ldflags "$LDFLAGS" \
+            -o "dist/wslpp-$GOOS-$GOARCH$EXT" .
+          go build -trimpath -buildvcs=false -ldflags "$LDFLAGS" \
+            -o "dist/wslpp-agent-$GOOS-$GOARCH$EXT" ./cmd/agent
           ls -la dist
       - name: Build GUI (windows and darwin)
         if: matrix.goos == 'windows' || matrix.goos == 'darwin'
@@ -67,19 +72,22 @@ jobs:
         run: |
           VERSION="${VERSION#v}"
           LDFLAGS="-s -w -X github.com/egoist/mygo.production=1 -X main.version=$VERSION"
-          # The icon generator is a host tool: run it on the Linux runner.
+          # Icons for the bundles plus COFF .syso resources that the Go linker
+          # embeds in the Windows exe. This generator is a host tool, so it
+          # must not inherit the target GOOS/GOARCH.
           mkdir -p build/icons
-          GOOS=linux GOARCH=amd64 go run ./tools/genicon -out build/icons
+          GOOS=linux GOARCH=amd64 go run ./tools/genicon \
+            -out build/icons -syso-dir cmd/gui
 
           if [ "$GOOS" = "windows" ]; then
-            go build -trimpath -tags mygo_noinspector \
+            go build -trimpath -buildvcs=false -tags mygo_noinspector \
               -ldflags "$LDFLAGS -H=windowsgui" \
               -o "dist/wslpp-gui-windows-$GOARCH.exe" ./cmd/gui
             if [ "$GOARCH" = "amd64" ]; then
               cp build/icons/icon.ico dist/wslpp-gui.ico
             fi
           else
-            go build -trimpath -tags mygo_noinspector \
+            go build -trimpath -buildvcs=false -tags mygo_noinspector \
               -ldflags "$LDFLAGS" \
               -o "dist/wslpp-gui-darwin-$GOARCH" ./cmd/gui
             APP="dist/wslpp-gui.app"

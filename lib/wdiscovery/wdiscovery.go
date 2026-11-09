@@ -16,10 +16,11 @@ import (
 // Expiry drops a source that stopped broadcasting (3 missed 3s rounds).
 const Expiry = 9 * time.Second
 
-// Target is one Windows listen port and where to forward it. Proc is the
-// process name reported by the agent, empty for older agents that do not
-// broadcast it.
+// Target is one Windows listen port and where to forward it. ID uniquely
+// identifies the (agent, port) pair, so several WSL distros can listen on the
+// same port without overwriting each other.
 type Target struct {
+	ID        string
 	Port      int64
 	WslIP     string
 	AgentPort int
@@ -27,6 +28,7 @@ type Target struct {
 }
 
 type source struct {
+	ip        string
 	ports     []int64
 	agentPort int
 	procs     map[int64]string
@@ -71,20 +73,26 @@ func serve(pc net.PacketConn) {
 			continue
 		}
 		src := udpAddr.IP.String()
+		// WSL2 distros can share one IP, so the agent's random channel port
+		// tells them apart. A restarted agent gets a new key and the old one
+		// expires after Expiry.
+		key := src + "/" + strconv.Itoa(agentPort)
 		mu.Lock()
-		sources[src] = &source{
+		sources[key] = &source{
+			ip:        src,
 			ports:     ports,
 			agentPort: agentPort,
 			procs:     broadcast.ParseProcs(payload),
 			lastSeen:  time.Now(),
 		}
 		mu.Unlock()
-		log.Printf("discover %s: ports=%v agentPort=%d", src, ports, agentPort)
+		log.Printf("discover %s: ports=%v agentPort=%d", key, ports, agentPort)
 	}
 }
 
 // Snapshot returns the current desired forwards, purging expired sources.
-// One port is forwarded once: first source (by sorted IP) wins.
+// Every (agent, port) pair is returned: when two agents share a port, the
+// proxy's bind fallback gives the second one a free Windows port.
 func Snapshot() []Target {
 	mu.Lock()
 	defer mu.Unlock()
@@ -100,16 +108,17 @@ func Snapshot() []Target {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	seen := map[int64]bool{}
 	var out []Target
 	for _, k := range keys {
 		s := sources[k]
 		for _, p := range s.ports {
-			if seen[p] {
-				continue
-			}
-			seen[p] = true
-			out = append(out, Target{Port: p, WslIP: k, AgentPort: s.agentPort, Proc: s.procs[p]})
+			out = append(out, Target{
+				ID:        k + "/" + strconv.FormatInt(p, 10),
+				Port:      p,
+				WslIP:     s.ip,
+				AgentPort: s.agentPort,
+				Proc:      s.procs[p],
+			})
 		}
 	}
 	return out

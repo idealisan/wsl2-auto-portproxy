@@ -1,7 +1,7 @@
-// wslpp-gui is the Windows GUI front end for wslpp. It lists the TCP ports
-// listening inside WSL together with their owning process names and lets the
-// user start or stop forwarding per row, or for a multi-selection. Unlike the
-// headless wslpp.exe it forwards nothing until the user asks for it.
+// wslpp-gui is the GUI front end for wslpp. It lists the TCP ports listening
+// inside every WSL environment together with their owning process names and
+// lets the user start or stop forwarding per row, or for a selection. Unlike
+// the headless wslpp.exe it forwards nothing until the user asks for it.
 package main
 
 import (
@@ -27,10 +27,10 @@ func main() {
 		a.mu.Lock()
 		a.win = mygo.NewWindow(mygo.WindowOptions{
 			Title:     "wslpp 端口转发",
-			Width:     760,
-			Height:    480,
-			MinWidth:  560,
-			MinHeight: 320,
+			Width:     920,
+			Height:    520,
+			MinWidth:  640,
+			MinHeight: 360,
 			Content:   ui.View(a.view),
 		})
 		a.mu.Unlock()
@@ -51,22 +51,28 @@ func (a *guiApp) reconcileLoop() {
 	}
 }
 
-// reconcile mirrors the headless main loop, but forwards only the ports the
+// reconcile mirrors the headless main loop, but forwards only the rows the
 // user enabled. It is the sole writer of storage.ProxyPool in this program.
 func (a *guiApp) reconcile() {
 	desired := wdiscovery.Snapshot()
 	var errs []string
 
+	// WSL2 distros can share an IP, so count distinct agent channels.
+	agents := map[string]bool{}
+	for _, t := range desired {
+		agents[fmt.Sprintf("%s/%d", t.WslIP, t.AgentPort)] = true
+	}
+
 	a.mu.Lock()
-	enabled := make(map[int64]bool, len(a.enabled))
-	for p := range a.enabled {
-		enabled[p] = true
+	enabled := make(map[string]bool, len(a.enabled))
+	for id := range a.enabled {
+		enabled[id] = true
 	}
 	a.mu.Unlock()
 
 	should := make([]wdiscovery.Target, 0, len(desired))
 	for _, t := range desired {
-		if !enabled[t.Port] {
+		if !enabled[t.ID] {
 			continue
 		}
 		should = append(should, t)
@@ -77,7 +83,7 @@ func (a *guiApp) reconcile() {
 		matched := false
 		for i := range storage.ProxyPool {
 			p := &storage.ProxyPool[i]
-			if p.TargetPort != t.Port {
+			if p.ID != t.ID {
 				continue
 			}
 			matched = true
@@ -93,7 +99,7 @@ func (a *guiApp) reconcile() {
 			break
 		}
 		if !matched {
-			np := proxy.Proxy{TargetPort: t.Port, WslIp: t.WslIP, AgentPort: t.AgentPort}
+			np := proxy.Proxy{ID: t.ID, TargetPort: t.Port, WslIp: t.WslIP, AgentPort: t.AgentPort}
 			if err := np.Start(); err != nil {
 				errs = append(errs, fmt.Sprintf("启动 :%d 失败: %s", t.Port, err))
 			} else {
@@ -106,7 +112,7 @@ func (a *guiApp) reconcile() {
 		keep := false
 		for _, t := range should {
 			pp := &storage.ProxyPool[i]
-			if pp.TargetPort == t.Port && pp.WslIp == t.WslIP && pp.AgentPort == t.AgentPort {
+			if pp.ID == t.ID && pp.WslIp == t.WslIP && pp.AgentPort == t.AgentPort {
 				keep = true
 				break
 			}
@@ -121,10 +127,10 @@ func (a *guiApp) reconcile() {
 		}
 	}
 
-	running := map[int64]int64{} // WSL port -> actual Windows listen port
+	running := map[string]int64{} // ID -> actual Windows listen port
 	for i := range storage.ProxyPool {
 		if storage.ProxyPool[i].IsRunning {
-			running[storage.ProxyPool[i].TargetPort] = storage.ProxyPool[i].ListenPort
+			running[storage.ProxyPool[i].ID] = storage.ProxyPool[i].ListenPort
 		}
 	}
 	storage.PoolMu.Unlock()
@@ -134,5 +140,5 @@ func (a *guiApp) reconcile() {
 	if online {
 		wslIP = desired[0].WslIP
 	}
-	a.applyState(desired, running, online, wslIP, errs)
+	a.applyState(desired, running, online, wslIP, len(agents), errs)
 }

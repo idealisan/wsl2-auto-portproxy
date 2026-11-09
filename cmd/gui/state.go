@@ -19,23 +19,24 @@ import (
 // any control is built. The list is virtualized, so per-row state must live
 // in the model rather than in the cell callback.
 type rowView struct {
-	Port       int64 // port listening inside WSL
-	ListenPort int64 // port actually bound on Windows (0 when not forwarding)
+	ID         string // (agent, port) identity
+	Port       int64  // port listening inside WSL
+	ListenPort int64  // port actually bound on Windows (0 when not forwarding)
 	Proc       string
-	WSLIP      string
-	AgentPort  int
+	WslLabel   string // which WSL environment this row came from
 	Checked    bool
 	Enabled    bool
 	Running    bool
 }
 
 type snapshot struct {
-	rows      []rowView
-	online    bool
-	wslIP     string
-	forwarded int
-	message   string
-	version   string
+	rows       []rowView
+	online     bool
+	wslIP      string
+	agentCount int
+	forwarded  int
+	message    string
+	version    string
 }
 
 type guiApp struct {
@@ -43,16 +44,17 @@ type guiApp struct {
 	win       *mygo.Window
 	listState *ui.ListState
 
-	targets map[int64]wdiscovery.Target // latest broadcast, keyed by port
-	checked map[int64]bool              // multi-selection
-	enabled map[int64]bool              // ports the user asked to forward
-	running map[int64]int64             // WSL port -> actual Windows listen port
-	online  bool
-	wslIP   string
-	message string
+	targets    map[string]wdiscovery.Target // by ID
+	chosen     ui.Selection[string]         // multi-selection (Ctrl/Cmd click)
+	enabled    map[string]bool              // ports the user asked to forward
+	running    map[string]int64             // ID -> actual Windows listen port
+	agentCount int
+	online     bool
+	wslIP      string
+	message    string
 
-	// sort is written by the table header on the UI thread and read by
-	// snapshotLocked, which also runs on the UI thread, so it needs no lock.
+	// sort and chosen are written by the table on the UI thread and read by
+	// snapshotLocked, which also runs on the UI thread, so they need no lock.
 	sort       ui.SortOrder
 	flashUntil time.Time
 }
@@ -60,10 +62,9 @@ type guiApp struct {
 func newApp() *guiApp {
 	return &guiApp{
 		listState: &ui.ListState{},
-		targets:   map[int64]wdiscovery.Target{},
-		checked:   map[int64]bool{},
-		enabled:   map[int64]bool{},
-		running:   map[int64]int64{},
+		targets:   map[string]wdiscovery.Target{},
+		enabled:   map[string]bool{},
+		running:   map[string]int64{},
 		message:   "等待 WSL agent 广播…（请确认 wslpp-agent 正在 WSL 内运行）",
 	}
 }
@@ -85,25 +86,25 @@ func (a *guiApp) refresh() {
 // table's Sort says; the table shows rows in exactly the order its cell
 // callback receives them.
 func (a *guiApp) snapshotLocked() snapshot {
-	ports := make([]int64, 0, len(a.targets))
-	for p := range a.targets {
-		ports = append(ports, p)
+	ids := make([]string, 0, len(a.targets))
+	for id := range a.targets {
+		ids = append(ids, id)
 	}
-	sort.Slice(ports, func(i, j int) bool { return ports[i] < ports[j] })
+	sort.Strings(ids)
 
-	rows := make([]rowView, 0, len(ports))
+	rows := make([]rowView, 0, len(ids))
 	forwarded := 0
-	for _, p := range ports {
-		t := a.targets[p]
+	for _, id := range ids {
+		t := a.targets[id]
 		r := rowView{
-			Port:       p,
-			ListenPort: a.running[p],
+			ID:         id,
+			Port:       t.Port,
+			ListenPort: a.running[id],
 			Proc:       t.Proc,
-			WSLIP:      t.WslIP,
-			AgentPort:  t.AgentPort,
-			Checked:    a.checked[p],
-			Enabled:    a.enabled[p],
-			Running:    a.running[p] != 0,
+			WslLabel:   fmt.Sprintf("%s:%d", t.WslIP, t.AgentPort),
+			Checked:    a.chosen.Has(id),
+			Enabled:    a.enabled[id],
+			Running:    a.running[id] != 0,
 		}
 		if r.Running {
 			forwarded++
@@ -112,33 +113,29 @@ func (a *guiApp) snapshotLocked() snapshot {
 	}
 	sortRows(rows, a.sort)
 	return snapshot{
-		rows:      rows,
-		online:    a.online,
-		wslIP:     a.wslIP,
-		forwarded: forwarded,
-		message:   a.message,
-		version:   version,
+		rows:       rows,
+		online:     a.online,
+		wslIP:      a.wslIP,
+		agentCount: a.agentCount,
+		forwarded:  forwarded,
+		message:    a.message,
+		version:    version,
 	}
 }
 
 // applyState publishes the result of a reconcile pass and refreshes the view.
-func (a *guiApp) applyState(desired []wdiscovery.Target, running map[int64]int64,
-	online bool, wslIP string, errs []string) {
+// It never touches chosen: that is owned by the UI thread's table selection.
+func (a *guiApp) applyState(desired []wdiscovery.Target, running map[string]int64,
+	online bool, wslIP string, agentCount int, errs []string) {
 	a.mu.Lock()
-	a.targets = make(map[int64]wdiscovery.Target, len(desired))
+	a.targets = make(map[string]wdiscovery.Target, len(desired))
 	for _, t := range desired {
-		a.targets[t.Port] = t
+		a.targets[t.ID] = t
 	}
 	a.running = running
+	a.agentCount = agentCount
 	a.online = online
 	a.wslIP = wslIP
-	// Selections for ports that disappeared are dropped; enabled stays sticky
-	// so a port that comes back is forwarded again without another click.
-	for p := range a.checked {
-		if _, ok := a.targets[p]; !ok {
-			delete(a.checked, p)
-		}
-	}
 	switch {
 	case len(errs) > 0:
 		a.message = strings.Join(errs, "；")
@@ -147,58 +144,62 @@ func (a *guiApp) applyState(desired []wdiscovery.Target, running map[int64]int64
 	case !online:
 		a.message = "等待 WSL agent 广播…（请确认 wslpp-agent 正在 WSL 内运行）"
 	default:
-		a.message = fmt.Sprintf("发现 %d 个监听端口，已转发 %d 个；点列头排序、拖列头边缘调宽度、点端口数字复制",
-			len(desired), len(running))
+		a.message = fmt.Sprintf("发现 %d 个监听端口（%d 个 WSL 环境），已转发 %d 个",
+			len(desired), agentCount, len(running))
 	}
 	a.mu.Unlock()
 	a.refresh()
 }
 
-func (a *guiApp) setChecked(port int64, on bool) {
-	a.mu.Lock()
+// setChecked syncs a checkbox click into the table's selection. Ctrl/Cmd
+// click, Shift click and Ctrl+A are handled by the table directly.
+func (a *guiApp) setChecked(id string, on bool) {
 	if on {
-		a.checked[port] = true
+		a.chosen.Add(id)
 	} else {
-		delete(a.checked, port)
+		a.chosen.Remove(id)
 	}
-	a.mu.Unlock()
 	a.refresh()
 }
 
-func (a *guiApp) toggle(port int64) {
+func (a *guiApp) toggle(id string) {
 	a.mu.Lock()
-	on := !a.enabled[port]
+	on := !a.enabled[id]
 	if on {
-		a.enabled[port] = true
+		a.enabled[id] = true
 	} else {
-		delete(a.enabled, port)
+		delete(a.enabled, id)
 	}
 	a.mu.Unlock()
 	a.refresh()
 }
 
 func (a *guiApp) selectAll(on bool) {
-	a.mu.Lock()
-	a.checked = map[int64]bool{}
+	a.chosen.Clear()
 	if on {
-		for p := range a.targets {
-			a.checked[p] = true
+		a.mu.Lock()
+		for id := range a.targets {
+			a.chosen.Add(id)
 		}
+		a.mu.Unlock()
 	}
-	a.mu.Unlock()
 	a.refresh()
 }
 
 func (a *guiApp) applyChecked(on bool) {
+	var ids []string
+	for id := range a.chosen.All() {
+		ids = append(ids, id)
+	}
 	a.mu.Lock()
-	for p := range a.checked {
-		if _, ok := a.targets[p]; !ok {
+	for _, id := range ids {
+		if _, ok := a.targets[id]; !ok {
 			continue
 		}
 		if on {
-			a.enabled[p] = true
+			a.enabled[id] = true
 		} else {
-			delete(a.enabled, p)
+			delete(a.enabled, id)
 		}
 	}
 	a.mu.Unlock()
@@ -207,8 +208,8 @@ func (a *guiApp) applyChecked(on bool) {
 
 func (a *guiApp) startAll() {
 	a.mu.Lock()
-	for p := range a.targets {
-		a.enabled[p] = true
+	for id := range a.targets {
+		a.enabled[id] = true
 	}
 	a.mu.Unlock()
 	a.refresh()
@@ -219,7 +220,7 @@ func (a *guiApp) stopSelected()  { a.applyChecked(false) }
 
 func (a *guiApp) stopAll() {
 	a.mu.Lock()
-	a.enabled = map[int64]bool{}
+	a.enabled = map[string]bool{}
 	a.mu.Unlock()
 	a.refresh()
 }
@@ -253,6 +254,8 @@ func compareRows(a, b rowView, col string) int {
 		return cmp.Compare(boolKey(a.Checked), boolKey(b.Checked))
 	case "port":
 		return cmp.Compare(a.Port, b.Port)
+	case "agent":
+		return cmp.Compare(a.WslLabel, b.WslLabel)
 	case "proc":
 		return cmp.Compare(a.Proc, b.Proc)
 	case "access":
@@ -262,7 +265,7 @@ func compareRows(a, b rowView, col string) int {
 	case "action":
 		return cmp.Compare(boolKey(a.Enabled), boolKey(b.Enabled))
 	default:
-		return cmp.Compare(a.Port, b.Port)
+		return cmp.Compare(a.ID, b.ID)
 	}
 }
 

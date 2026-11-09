@@ -38,7 +38,7 @@ func main() {
 			matched := false
 			for i := range storage.ProxyPool {
 				p := &storage.ProxyPool[i]
-				if p.TargetPort != t.Port {
+				if p.ID != t.ID {
 					continue
 				}
 				matched = true
@@ -54,7 +54,7 @@ func main() {
 				break
 			}
 			if !matched {
-				np := proxy.Proxy{TargetPort: t.Port, WslIp: t.WslIP, AgentPort: t.AgentPort}
+				np := proxy.Proxy{ID: t.ID, TargetPort: t.Port, WslIp: t.WslIP, AgentPort: t.AgentPort}
 				if err := np.Start(); err != nil {
 					log.Printf("start proxy :%d error,%s\n", t.Port, err)
 				} else {
@@ -68,7 +68,7 @@ func main() {
 			keep := false
 			for _, t := range desired {
 				pp := &storage.ProxyPool[i]
-				if pp.TargetPort == t.Port && pp.WslIp == t.WslIP && pp.AgentPort == t.AgentPort {
+				if pp.ID == t.ID && pp.WslIp == t.WslIP && pp.AgentPort == t.AgentPort {
 					keep = true
 					break
 				}

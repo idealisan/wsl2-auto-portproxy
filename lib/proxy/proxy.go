@@ -23,8 +23,9 @@ const keepAlivePeriod = 15 * time.Second
 // actual mapping. Existing connections drain on Stop; only the listener is
 // closed.
 type Proxy struct {
-	TargetPort int64 // port inside WSL, sent to the agent
-	ListenPort int64 // port bound on Windows (0 -> start with TargetPort)
+	ID         string // (agent, port) identity, stable across reconciles
+	TargetPort int64  // port inside WSL, sent to the agent
+	ListenPort int64  // port bound on Windows (0 -> start with TargetPort)
 	WslIp      string
 	AgentPort  int
 	Listener   *net.TCPListener
@@ -35,22 +36,24 @@ func (p *Proxy) Start() error {
 	if p.ListenPort == 0 {
 		p.ListenPort = p.TargetPort
 	}
-	ln, err := net.ListenTCP("tcp", &net.TCPAddr{Port: int(p.ListenPort)})
+	ln, err := listenTCP(int(p.ListenPort))
 	if err != nil {
 		// Something on this machine already owns the port. Rather than give
 		// up, let the OS assign a free one; clients reach WSL :TargetPort at
-		// WindowsIP:ListenPort.
+		// WindowsIP:ListenPort. This also lets several agents share a WSL
+		// port: the first binds it, the rest get their own free ports.
 		requested := p.ListenPort
-		ln, err = net.ListenTCP("tcp", &net.TCPAddr{Port: 0})
+		ln, err = listenTCP(0)
 		if err != nil {
-			log.Printf("Could not start proxy for WSL :%d: %v\n", p.TargetPort, err)
+			log.Printf("[%s] could not start proxy for WSL :%d: %v", p.ID, p.TargetPort, err)
 			return err
 		}
 		p.ListenPort = int64(ln.Addr().(*net.TCPAddr).Port)
-		log.Printf(":%d busy, forwarding WSL :%d on :%d instead", requested, p.TargetPort, p.ListenPort)
+		log.Printf("[%s] :%d busy, forwarding WSL :%d on :%d instead",
+			p.ID, requested, p.TargetPort, p.ListenPort)
 	}
 	p.Listener = ln
-	log.Printf("new proxy :%d -> %s:%d/%d", p.ListenPort, p.WslIp, p.AgentPort, p.TargetPort)
+	log.Printf("[%s] new proxy :%d -> %s:%d/%d", p.ID, p.ListenPort, p.WslIp, p.AgentPort, p.TargetPort)
 	go func() {
 		for {
 			conn, err := p.Listener.AcceptTCP()
@@ -69,7 +72,7 @@ func (p *Proxy) Start() error {
 
 func (p *Proxy) Stop() error {
 	p.IsRunning = false
-	log.Printf("proxy stop, :%d -> %s:%d/%d", p.ListenPort, p.WslIp, p.AgentPort, p.TargetPort)
+	log.Printf("[%s] proxy stop, :%d -> %s:%d/%d", p.ID, p.ListenPort, p.WslIp, p.AgentPort, p.TargetPort)
 	if p.Listener == nil {
 		return nil
 	}
