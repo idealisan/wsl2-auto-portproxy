@@ -3,11 +3,15 @@ name: release
 # Build and publish all binaries on every version tag (v*).
 # Matrix: windows / linux / darwin x amd64 / arm64 = 6 combos,
 # each producing wslpp and wslpp-agent = 12 release files. The GUI is built
-# for windows and darwin: two .exe, two macOS .app.zip bundles and one .ico,
-# for 17 files total.
+# for windows (two .exe and one .ico) on Linux and for darwin (two signed
+# DMGs) on a macOS runner, for 17 files total.
 # All binaries use -trimpath -buildvcs=false -ldflags "-s -w": strip the
 # symbol table and DWARF and drop local paths to keep them small. No packing,
 # compression or obfuscation, which antivirus products flag as suspicious.
+# The macOS GUI cannot be cross-compiled and zipped on Linux: an unsigned
+# .app downloaded from GitHub carries a quarantine attribute and Gatekeeper
+# reports it as damaged. deploy/package-macos.sh uses mygo's packager on a
+# macOS runner to build a code-signed .app inside a DMG instead.
 on:
   push:
     tags:
@@ -26,7 +30,7 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: true
-      # go.sum is generated here rather than committed locally.
+      # go.sum now records mygo and the CLI pinned as a Go tool.
       - run: go mod tidy
       - run: go vet ./...
       - run: go test ./...
@@ -62,8 +66,8 @@ jobs:
           go build -trimpath -buildvcs=false -ldflags "$LDFLAGS" \
             -o "dist/wslpp-agent-$GOOS-$GOARCH$EXT" ./cmd/agent
           ls -la dist
-      - name: Build GUI (windows and darwin)
-        if: matrix.goos == 'windows' || matrix.goos == 'darwin'
+      - name: Build GUI (windows)
+        if: matrix.goos == 'windows'
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
@@ -72,32 +76,17 @@ jobs:
         run: |
           VERSION="${VERSION#v}"
           LDFLAGS="-s -w -X github.com/egoist/mygo.production=1 -X main.version=$VERSION"
-          # Icons for the bundles plus COFF .syso resources that the Go linker
-          # embeds in the Windows exe. This generator is a host tool, so it
-          # must not inherit the target GOOS/GOARCH.
+          # COFF .syso resources that the Go linker embeds in the Windows exe.
+          # This generator is a host tool, so it must not inherit the target
+          # GOOS/GOARCH.
           mkdir -p build/icons
           GOOS=linux GOARCH=amd64 go run ./tools/genicon \
             -out build/icons -syso-dir cmd/gui
-
-          if [ "$GOOS" = "windows" ]; then
-            go build -trimpath -buildvcs=false -tags mygo_noinspector \
-              -ldflags "$LDFLAGS -H=windowsgui" \
-              -o "dist/wslpp-gui-windows-$GOARCH.exe" ./cmd/gui
-            if [ "$GOARCH" = "amd64" ]; then
-              cp build/icons/icon.ico dist/wslpp-gui.ico
-            fi
-          else
-            go build -trimpath -buildvcs=false -tags mygo_noinspector \
-              -ldflags "$LDFLAGS" \
-              -o "dist/wslpp-gui-darwin-$GOARCH" ./cmd/gui
-            APP="dist/wslpp-gui.app"
-            mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-            cp "dist/wslpp-gui-darwin-$GOARCH" "$APP/Contents/MacOS/wslpp-gui"
-            cp build/icons/icon.icns "$APP/Contents/Resources/wslpp-gui.icns"
-            sed "s/@VERSION@/$VERSION/" deploy/Info.plist > "$APP/Contents/Info.plist"
-            chmod +x "$APP/Contents/MacOS/wslpp-gui"
-            (cd dist && zip -qr "wslpp-gui-darwin-$GOARCH.app.zip" wslpp-gui.app)
-            rm -rf "$APP" "dist/wslpp-gui-darwin-$GOARCH"
+          go build -trimpath -buildvcs=false -tags mygo_noinspector \
+            -ldflags "$LDFLAGS -H=windowsgui" \
+            -o "dist/wslpp-gui-windows-$GOARCH.exe" ./cmd/gui
+          if [ "$GOARCH" = "amd64" ]; then
+            cp build/icons/icon.ico dist/wslpp-gui.ico
           fi
           ls -la dist
       - uses: actions/upload-artifact@v4
@@ -105,8 +94,58 @@ jobs:
           name: bins-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*
 
+  build-macos:
+    needs: test
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    env:
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - run: go mod tidy
+      # Optional: with a Developer ID the DMG is signed, notarized and
+      # stapled, so Gatekeeper opens it without a prompt. Without these
+      # secrets the workflow still publishes an ad-hoc signed DMG.
+      - name: Import Developer ID certificate and notary credentials
+        if: env.MACOS_CERTIFICATE != ''
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -base64 24)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain
+          xcrun notarytool store-credentials notary --keychain "$keychain" \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
+          echo "NOTARY_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+      - name: Build, sign and package the macOS app
+        env:
+          VERSION: ${{ github.ref_name }}
+          GOARCH: ${{ matrix.goarch }}
+        run: bash deploy/package-macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bins-macos-${{ matrix.goarch }}
+          path: dist/wslpp-gui-darwin-*.dmg
+
   release:
-    needs: build
+    needs: [build, build-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

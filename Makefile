@@ -1,4 +1,4 @@
-.PHONY:build build-agent build-gui build-all clean test dev
+.PHONY:build build-agent build-gui build-gui-macos build-all clean test dev
 # Go parameters
 GOCMD=go
 GORUN=$(GOCMD) run
@@ -32,6 +32,10 @@ build-agent:
 build-gui: mod-tidy
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GOBUILD) -trimpath -tags mygo_noinspector \
 	 $(GUI_LDFLAGS) -o ./dist/wslpp-gui.exe ./cmd/gui
+
+# macOS packaging must run on a Mac: mygo builds a signed .app and a DMG.
+build-gui-macos: mod-tidy
+	bash deploy/package-macos.sh
 
 build-all: build build-agent build-gui
 

@@ -1,0 +1,17 @@
+{
+  "name": "wslpp-gui",
+  "slug": "wslpp-gui",
+  "identifier": "dev.wslpp.gui",
+  "version": "0.0.0",
+  "main": "./cmd/gui",
+  "icon": "build/icons/icon.png",
+  "out": "dist/macos",
+  "macos": {
+    "signingIdentity": "-",
+    "minimumSystemVersion": "11.0",
+    "infoPlist": {
+      "CFBundleDisplayName": "wslpp 端口转发",
+      "NSHighResolutionCapable": true
+    }
+  }
+}

@@ -58,13 +58,16 @@ and run it (add it to startup for always-on forwarding). Logs go to stdout.
 ### 3. GUI (Windows / macOS)
 
 Download `wslpp-gui-windows-<arch>.exe` for Windows, or
-`wslpp-gui-darwin-<arch>.app.zip` for macOS (unzip it and drag
-`wslpp-gui.app` into Applications). The macOS bundle is unsigned, so on
-first launch use right-click → Open, or run
-`xattr -d com.apple.quarantine wslpp-gui.app`. Both builds share the same
-native mygo UI. The icon is drawn by `tools/genicon` (two arrows for ports
-forwarded in both directions) and embedded in both the Windows exe and the
-macOS bundle.
+`wslpp-gui-darwin-<arch>.dmg` for macOS (open it and drag `wslpp-gui.app`
+into Applications). The macOS image contains a real code-signed `.app`
+bundle; when the repository has an Apple Developer ID configured it is also
+notarized and opens directly. Otherwise it is signed ad hoc — it is no longer
+reported as damaged, but Gatekeeper may still ask you to confirm the first
+launch: right-click the app → Open, or run
+`xattr -d com.apple.quarantine /Applications/wslpp-gui.app`. Both builds
+share the same native mygo UI. The icon is drawn by `tools/genicon` (two
+arrows for ports forwarded in both directions) and embedded in both the
+Windows exe and the macOS bundle.
 
 The GUI lists every WSL listening port with its process name and forwards
 **nothing** until you choose:
@@ -93,22 +96,52 @@ other, not both (they would compete for the same host ports).
 
 A GitHub Actions workflow builds and publishes on every `v*` tag:
 `wslpp` and `wslpp-agent` for windows / linux / darwin × amd64 / arm64,
-`wslpp-gui-windows-*.exe` for Windows, `wslpp-gui-darwin-*.app.zip` for
+`wslpp-gui-windows-*.exe` for Windows, `wslpp-gui-darwin-*.dmg` for
 macOS, and `wslpp-gui.ico`
 (17 files, see `.github/workflows/release.yml`). Every binary is built with
 `-trimpath -buildvcs=false -s -w` to strip symbols, DWARF and local paths;
 no packing, compression or obfuscation is used, which antivirus products
 often flag.
 
+The macOS GUI is built on a macOS runner by `deploy/package-macos.sh`. It
+uses mygo's packager to produce a proper `.app` bundle (`PkgInfo`, sealed
+resources, `Info.plist`), sign it, and wrap it in a DMG. Cross-compiling on
+Linux and zipping a hand-made bundle produced an unsigned app that
+Gatekeeper reports as "damaged" after a browser download; a DMG is also the
+format macOS expects for distribution. Run `make build-gui-macos` on a Mac
+to produce the same DMG locally.
+
+### macOS signing and notarization (optional)
+
+By default the DMG is signed ad hoc: it runs on Apple silicon and is no
+longer reported as damaged, but Gatekeeper may ask for confirmation on the
+first launch. To have it open with no prompt at all, add these repository
+secrets (Apple Developer Program membership required):
+
+- `MACOS_CERTIFICATE`: base64 of the `Developer ID Application` `.p12`.
+- `MACOS_CERTIFICATE_PASSWORD`: the `.p12` password.
+- `MACOS_SIGNING_IDENTITY`: e.g. `Developer ID Application: Name (TEAMID)`.
+- `APPLE_ID`: the Apple ID of the developer account.
+- `APPLE_TEAM_ID`: the team ID.
+- `APPLE_APP_PASSWORD`: an app-specific password created at
+  [account.apple.com](https://account.apple.com).
+
+All six are required together. The workflow imports the certificate into a
+temporary keychain, signs with the hardened runtime, submits the DMG to
+Apple's notary service and staples the ticket. With `MACOS_CERTIFICATE` unset
+it skips all of this and publishes the ad-hoc signed DMG, so forks need no
+configuration.
+
 ## Develop
 
 Development requires Go 1.27.3+ (the GUI depends on mygo v0.8.3).
 
 ```bash
-make build        # wslpp.exe (windows/amd64) -> dist/
-make build-agent  # agent (linux amd64+arm64) -> dist/
-make build-gui    # wslpp-gui.exe (windows/amd64) -> dist/
-make build-all    # all three
+make build           # wslpp.exe (windows/amd64) -> dist/
+make build-agent     # agent (linux amd64+arm64) -> dist/
+make build-gui       # wslpp-gui.exe (windows/amd64) -> dist/
+make build-gui-macos # signed .app + DMG (requires macOS) -> dist/
+make build-all       # all three
 go run ./tools/genicon -out build/icons  # icon.png / .icns / .ico
 go test ./...     # unit tests (protocol, /proc inodes, process names, proxy fallback)
 ```
