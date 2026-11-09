@@ -146,3 +146,30 @@ func TestProcResolverCache(t *testing.T) {
 		t.Fatalf("after fingerprint change, resolve = %v", third)
 	}
 }
+
+// comm is capped at 15 characters; exe must win so long names are complete.
+func TestProcessNamePrefersExeOverComm(t *testing.T) {
+	root := t.TempDir()
+	writeProc(t, root, "100", "sun-ray-nogui-l", map[string]string{"3": "socket:[12345]"})
+	if err := os.Symlink("/usr/local/bin/sun-ray-nogui-linux-amd64", filepath.Join(root, "100", "exe")); err != nil {
+		t.Fatal(err)
+	}
+	got := socketInodeOwners(map[uint64]bool{12345: true}, root)
+	want := map[uint64]string{12345: "sun-ray-nogui-linux-amd64"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("owners = %v, want %v", got, want)
+	}
+}
+
+func TestProcessNameFallsBackToCmdline(t *testing.T) {
+	root := t.TempDir()
+	writeProc(t, root, "200", "", map[string]string{"4": "socket:[23456]"})
+	if err := os.WriteFile(filepath.Join(root, "200", "cmdline"),
+		[]byte("/opt/tools/very-long-service-name\x00--flag\x00"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got := processName(root, "200")
+	if got != "very-long-service-name" {
+		t.Fatalf("processName = %q", got)
+	}
+}

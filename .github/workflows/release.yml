@@ -2,8 +2,9 @@ name: release
 
 # Build and publish all binaries on every version tag (v*).
 # Matrix: windows / linux / darwin x amd64 / arm64 = 6 combos,
-# each producing wslpp and wslpp-agent = 12 release files, plus two
-# wslpp-gui-windows-*.exe files for the windows combos (14 total).
+# each producing wslpp and wslpp-agent = 12 release files. The GUI is built
+# for windows and darwin: two .exe, two macOS .app.zip bundles and one .ico,
+# for 17 files total.
 on:
   push:
     tags:
@@ -56,8 +57,8 @@ jobs:
           go build -ldflags "$LDFLAGS" -o "dist/wslpp-$GOOS-$GOARCH$EXT" .
           go build -ldflags "$LDFLAGS" -o "dist/wslpp-agent-$GOOS-$GOARCH$EXT" ./cmd/agent
           ls -la dist
-      - name: Build wslpp-gui (windows only)
-        if: matrix.goos == 'windows'
+      - name: Build GUI (windows and darwin)
+        if: matrix.goos == 'windows' || matrix.goos == 'darwin'
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
@@ -65,9 +66,31 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           VERSION="${VERSION#v}"
-          go build -trimpath -tags mygo_noinspector \
-            -ldflags "-s -w -H=windowsgui -X github.com/egoist/mygo.production=1 -X main.version=$VERSION" \
-            -o "dist/wslpp-gui-windows-$GOARCH.exe" ./cmd/gui
+          LDFLAGS="-s -w -X github.com/egoist/mygo.production=1 -X main.version=$VERSION"
+          # The icon generator is a host tool: run it on the Linux runner.
+          mkdir -p build/icons
+          GOOS=linux GOARCH=amd64 go run ./tools/genicon -out build/icons
+
+          if [ "$GOOS" = "windows" ]; then
+            go build -trimpath -tags mygo_noinspector \
+              -ldflags "$LDFLAGS -H=windowsgui" \
+              -o "dist/wslpp-gui-windows-$GOARCH.exe" ./cmd/gui
+            if [ "$GOARCH" = "amd64" ]; then
+              cp build/icons/icon.ico dist/wslpp-gui.ico
+            fi
+          else
+            go build -trimpath -tags mygo_noinspector \
+              -ldflags "$LDFLAGS" \
+              -o "dist/wslpp-gui-darwin-$GOARCH" ./cmd/gui
+            APP="dist/wslpp-gui.app"
+            mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+            cp "dist/wslpp-gui-darwin-$GOARCH" "$APP/Contents/MacOS/wslpp-gui"
+            cp build/icons/icon.icns "$APP/Contents/Resources/wslpp-gui.icns"
+            sed "s/@VERSION@/$VERSION/" deploy/Info.plist > "$APP/Contents/Info.plist"
+            chmod +x "$APP/Contents/MacOS/wslpp-gui"
+            (cd dist && zip -qr "wslpp-gui-darwin-$GOARCH.app.zip" wslpp-gui.app)
+            rm -rf "$APP" "dist/wslpp-gui-darwin-$GOARCH"
+          fi
           ls -la dist
       - uses: actions/upload-artifact@v4
         with:

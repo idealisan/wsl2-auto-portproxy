@@ -16,7 +16,8 @@ gaps with two pieces:
 
 - `wslpp-agent` (Linux, runs in WSL): scans all local TCP listeners every 3s
   via `/proc/net/tcp*` (any bind address), resolves each listener's owning
-  process from `/proc/<pid>/fd` + `/proc/<pid>/comm`, then broadcasts
+  process from `/proc/<pid>/fd` + `/proc/<pid>/exe` (with cmdline/comm
+  fallbacks), then broadcasts
   `ports + agent-port + process names` on the fixed shared UDP port **1033**
   (global broadcast + subnet broadcast + host unicast for NAT reliability),
   and serves a single random TCP channel port. Each inbound connection sends
@@ -56,20 +57,34 @@ Download `wslpp-windows-<arch>.exe` from
 [Releases](https://github.com/HobaiRiku/wsl2-auto-portproxy/releases)
 and run it (add it to startup for always-on forwarding). Logs go to stdout.
 
-### 3. Windows GUI (choose ports by hand)
+### 3. GUI (Windows / macOS)
 
-Download `wslpp-gui-windows-<arch>.exe` from
-[Releases](https://github.com/HobaiRiku/wsl2-auto-portproxy/releases)
-and run it. It lists every WSL listening port together with its process name
-and forwards **nothing** until you choose: tick rows and press
-**启动所选** / **停止所选**, or use each row's **启动/停止** button. Process
-names require the new agent from step 1; with an older agent the process
-column shows `-`. When a WSL port is already bound on Windows, the proxy
-transparently picks a free random port; the 访问端口 column shows the address
-to use from your LAN (bold when it differs from the WSL port).
+Download `wslpp-gui-windows-<arch>.exe` for Windows, or
+`wslpp-gui-darwin-<arch>.app.zip` for macOS (unzip it and drag
+`wslpp-gui.app` into Applications). The macOS bundle is unsigned, so on
+first launch use right-click → Open, or run
+`xattr -d com.apple.quarantine wslpp-gui.app`. Both builds share the same
+native mygo UI; the icon is drawn by `tools/genicon` (two arrows for ports
+forwarded in both directions) and embedded in the macOS bundle.
+
+The GUI lists every WSL listening port with its process name and forwards
+**nothing** until you choose:
+
+- tick rows and press **启动所选** / **停止所选**, use each row's
+  **启动/停止** button, or use **全部启动** / **全部停止** for every port.
+  **全选** / **全不选** control the tick boxes.
+- click any column header to sort; drag a header's edge to resize that
+  column, or drag the header itself to reorder columns.
+- the **访问端口** column shows the actual host port as a plain number.
+  Click it to copy to the clipboard, then paste after `WindowsIP:`. When a
+  WSL port is already bound on the host, a free random port is used instead
+  and shown in bold.
+- process names come from the new agent in step 1 and are read from
+  `/proc/<pid>/exe`, so long names are not truncated to 15 characters; an
+  older agent leaves the column empty.
 
 The GUI and the headless `wslpp.exe` are separate programs — run one or the
-other, not both (they would compete for the same Windows ports).
+other, not both (they would compete for the same host ports).
 
 > The same security warning applies: forwarding a loopback-only service makes
 > it reachable from your LAN.
@@ -78,8 +93,9 @@ other, not both (they would compete for the same Windows ports).
 
 A GitHub Actions workflow builds and publishes on every `v*` tag:
 `wslpp` and `wslpp-agent` for windows / linux / darwin × amd64 / arm64,
-plus `wslpp-gui` for windows × amd64 / arm64
-(14 files, see `.github/workflows/release.yml`).
+`wslpp-gui-windows-*.exe` for Windows, `wslpp-gui-darwin-*.app.zip` for
+macOS, and `wslpp-gui.ico`
+(17 files, see `.github/workflows/release.yml`).
 
 ## Develop
 
@@ -90,6 +106,7 @@ make build        # wslpp.exe (windows/amd64) -> dist/
 make build-agent  # agent (linux amd64+arm64) -> dist/
 make build-gui    # wslpp-gui.exe (windows/amd64) -> dist/
 make build-all    # all three
+go run ./tools/genicon -out build/icons  # icon.png / .icns / .ico
 go test ./...     # unit tests (protocol, /proc inodes, process names, proxy fallback)
 ```
 

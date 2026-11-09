@@ -2,6 +2,7 @@ package discover
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -169,21 +170,47 @@ func socketInodeOwners(wanted map[uint64]bool, procRoot string) map[uint64]strin
 			if _, exists := owners[ino]; exists {
 				continue
 			}
-			owners[ino] = processName(filepath.Join(procRoot, pid, "comm"))
+			owners[ino] = processName(procRoot, pid)
 		}
 	}
 	return owners
 }
 
-func processName(path string) string {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return "unknown"
+// processName prefers the real executable name. /proc/<pid>/comm is capped at
+// 15 characters by the kernel, so a name like "sun-ray-nogui-linux-amd64"
+// shows up there as "sun-ray-nogui-l". /proc/<pid>/exe and cmdline are not.
+func processName(procRoot, pid string) string {
+	dir := filepath.Join(procRoot, pid)
+	if target, err := os.Readlink(filepath.Join(dir, "exe")); err == nil {
+		if name := cleanProcName(filepath.Base(target)); name != "" {
+			return name
+		}
 	}
-	if name := strings.TrimSpace(string(b)); name != "" {
-		return name
+	if b, err := os.ReadFile(filepath.Join(dir, "cmdline")); err == nil {
+		if i := bytes.IndexByte(b, 0); i > 0 {
+			if name := cleanProcName(filepath.Base(string(b[:i]))); name != "" {
+				return name
+			}
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "comm")); err == nil {
+		if name := strings.TrimSpace(string(b)); name != "" {
+			return name
+		}
 	}
 	return "unknown"
+}
+
+func cleanProcName(s string) string {
+	// Linux appends " (deleted)" to a replaced executable.
+	if i := strings.Index(s, " (deleted)"); i >= 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	s = strings.TrimSpace(s)
+	if s == "" || s == "." || s == "/" {
+		return ""
+	}
+	return filepath.Base(s)
 }
 
 func copyProcs(src map[int64]string) map[int64]string {

@@ -12,6 +12,19 @@ func (a *guiApp) view(c *ui.Context) {
 	a.mu.Unlock()
 
 	a.listState.Key = func(i int) any { return snap.rows[i].Port }
+	a.listState.Sort = &a.sort
+
+	// A Table gives us click-to-sort headers and draggable column edges.
+	// Every column is sortable and resizable; Width 0 shares the leftover
+	// room. IDs match the switch in compareRows.
+	cols := []ui.TableColumn{
+		{Title: "选择", ID: "select", Width: 64, MinWidth: 56, MaxWidth: 96, Sortable: true},
+		{Title: "WSL 端口", ID: "port", Width: 90, MinWidth: 70, MaxWidth: 160, Sortable: true},
+		{Title: "进程 / 服务", ID: "proc", MinWidth: 150, Sortable: true},
+		{Title: "访问端口", ID: "access", Width: 100, MinWidth: 80, MaxWidth: 160, Sortable: true},
+		{Title: "状态", ID: "status", Width: 90, MinWidth: 70, MaxWidth: 140, Sortable: true},
+		{Title: "操作", ID: "action", Width: 90, MinWidth: 70, MaxWidth: 140, Sortable: true},
+	}
 
 	ui.Column(c).Fill().Padding(12).Gap(8).Children(func() {
 		// Status bar.
@@ -28,58 +41,53 @@ func (a *guiApp) view(c *ui.Context) {
 			}
 		})
 		ui.Text(c, snap.message).TextColor(c.Theme().TextMuted).SingleLine()
-		ui.Text(c, "本机端口被占用时会自动改用随机端口，请按「访问端口」列的地址从局域网访问。").
+		ui.Text(c, "本机端口被占用时自动改用随机端口；点「访问端口」数字复制，拖列头边缘调宽度，点列头排序。").
 			TextColor(c.Theme().TextMuted).SingleLine()
 
-		// Column headers, kept in the same widths as the rows below.
-		ui.Row(c).Gap(8).Padding(6, 8).Children(func() {
-			ui.Text(c, "选").Width(28)
-			ui.Text(c, "WSL 端口").Width(70)
-			ui.Text(c, "进程 / 服务").Grow(1)
-			ui.Text(c, "访问端口").Width(90)
-			ui.Text(c, "状态").Width(70)
-			ui.Text(c, "操作").Width(64)
-		})
-
-		ui.List(c, a.listState, len(snap.rows), func(i int) {
-			r := snap.rows[i]
-			ui.Row(c).Gap(8).Padding(6, 8).Children(func() {
+		ui.Table(c, a.listState, cols, len(snap.rows), func(row, col int) {
+			r := snap.rows[row]
+			switch col {
+			case 0:
 				cb := ui.Checkbox(c.Key(r.Port), &r.Checked, "")
 				cb.OnChange(func() { a.setChecked(r.Port, r.Checked) })
-
-				ui.Textf(c, "%d", r.Port).Width(70)
-				ui.Text(c, orDash(r.Proc)).Grow(1).SingleLine()
-
-				if r.Running {
-					portText := ui.Textf(c, ":%d", r.ListenPort).Width(90)
-					if r.ListenPort != r.Port {
-						// A different port means the host one was busy.
-						portText.Bold()
-					}
-				} else {
-					ui.Text(c, "-").Width(90).TextColor(c.Theme().TextMuted)
+			case 1:
+				ui.Textf(c, "%d", r.Port)
+			case 2:
+				// No SingleLine(): long process names wrap and the row grows
+				// instead of being clipped.
+				ui.Text(c, orDash(r.Proc))
+			case 3:
+				if !r.Running {
+					ui.Text(c, "-").TextColor(c.Theme().TextMuted)
+					break
 				}
-				ui.Text(c, rowStatus(r)).Width(70)
-
+				// Just the number, no colon. Click to copy it.
+				ui.ButtonBase(c).Tooltip("点击复制端口").OnClick(func() {
+					a.copyPort(r.ListenPort)
+				}).Children(func() {
+					t := ui.Textf(c, "%d", r.ListenPort)
+					if r.ListenPort != r.Port {
+						t.Bold() // fallback port, because the host one was busy
+					}
+				})
+			case 4:
+				ui.Text(c, rowStatus(r))
+			case 5:
 				label := "启动"
 				if r.Enabled {
 					label = "停止"
 				}
-				ui.Button(c, label).Width(64).OnClick(func() { a.toggle(r.Port) })
-			})
-		}).Grow(1).Children(func() {
-			if len(snap.rows) == 0 {
-				ui.Text(c, "未发现 WSL 监听端口，等待 agent 广播…").
-					TextColor(c.Theme().TextMuted).Padding(12)
+				ui.Button(c, label).OnClick(func() { a.toggle(r.Port) })
 			}
-		})
+		}).Grow(1)
 
 		// Bottom actions. Collection changes go through OnClick, which runs
 		// after the view has finished building.
-		ui.Row(c).Gap(8).Children(func() {
+		ui.Row(c).Gap(6).Children(func() {
 			ui.Button(c, "全选").OnClick(func() { a.selectAll(true) })
-			ui.Button(c, "取消全选").OnClick(func() { a.selectAll(false) })
-			ui.PrimaryButton(c, "启动所选").OnClick(a.startSelected)
+			ui.Button(c, "全不选").OnClick(func() { a.selectAll(false) })
+			ui.PrimaryButton(c, "全部启动").OnClick(a.startAll)
+			ui.Button(c, "启动所选").OnClick(a.startSelected)
 			ui.Button(c, "停止所选").OnClick(a.stopSelected)
 			ui.Button(c, "全部停止").OnClick(a.stopAll)
 			ui.Button(c, "刷新").OnClick(a.refresh)
