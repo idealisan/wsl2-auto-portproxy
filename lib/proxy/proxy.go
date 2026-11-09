@@ -36,14 +36,16 @@ func (p *Proxy) Start() error {
 	if p.ListenPort == 0 {
 		p.ListenPort = p.TargetPort
 	}
-	ln, err := listenTCP(int(p.ListenPort))
+	ln, err := net.ListenTCP("tcp", &net.TCPAddr{Port: int(p.ListenPort)})
 	if err != nil {
-		// Something on this machine already owns the port. Rather than give
-		// up, let the OS assign a free one; clients reach WSL :TargetPort at
-		// WindowsIP:ListenPort. This also lets several agents share a WSL
-		// port: the first binds it, the rest get their own free ports.
+		// The wildcard bind itself is the availability check. Only when it
+		// genuinely fails (another wildcard listener, e.g. a second agent on
+		// the same port) do we ask the OS for a free port. A service bound to
+		// 127.0.0.1:P — wslhost's localhostForwarding, for instance — does
+		// not block 0.0.0.0:P, and LAN traffic to WindowsIP:P still reaches
+		// this proxy, so that port stays as-is.
 		requested := p.ListenPort
-		ln, err = listenTCP(0)
+		ln, err = net.ListenTCP("tcp", &net.TCPAddr{Port: 0})
 		if err != nil {
 			log.Printf("[%s] could not start proxy for WSL :%d: %v", p.ID, p.TargetPort, err)
 			return err
