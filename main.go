@@ -20,6 +20,10 @@ func main() {
 	// print version
 	var showVersion bool
 	flag.BoolVar(&showVersion, "v", false, "show version")
+	// By default forwards bind 127.0.0.1 and are reachable only from this
+	// host. -external exposes them on 0.0.0.0 (all interfaces / LAN).
+	var external bool
+	flag.BoolVar(&external, "external", false, "bind forwards to 0.0.0.0 instead of 127.0.0.1")
 	flag.Parse()
 	if showVersion {
 		fmt.Println(version)
@@ -42,9 +46,10 @@ func main() {
 					continue
 				}
 				matched = true
-				if p.WslIp != t.WslIP || p.AgentPort != t.AgentPort {
-					// stale backend (agent restarted / WSL IP drifted);
-					// stop it, the cleanup below drops it and it is recreated next round
+				if p.WslIp != t.WslIP || p.AgentPort != t.AgentPort || p.External != external {
+					// stale backend (agent restarted / WSL IP drifted) or the
+					// bind mode changed; stop it, the cleanup below drops it and
+					// it is recreated next round with the current settings.
 					_ = p.Stop()
 				} else if !p.IsRunning {
 					if err := p.Start(); err != nil {
@@ -54,7 +59,7 @@ func main() {
 				break
 			}
 			if !matched {
-				np := proxy.Proxy{ID: t.ID, TargetPort: t.Port, WslIp: t.WslIP, AgentPort: t.AgentPort}
+				np := proxy.Proxy{ID: t.ID, TargetPort: t.Port, WslIp: t.WslIP, AgentPort: t.AgentPort, External: external}
 				if err := np.Start(); err != nil {
 					log.Printf("start proxy :%d error,%s\n", t.Port, err)
 				} else {
@@ -68,7 +73,7 @@ func main() {
 			keep := false
 			for _, t := range desired {
 				pp := &storage.ProxyPool[i]
-				if pp.ID == t.ID && pp.WslIp == t.WslIP && pp.AgentPort == t.AgentPort {
+				if pp.ID == t.ID && pp.WslIp == t.WslIP && pp.AgentPort == t.AgentPort && pp.External == external {
 					keep = true
 					break
 				}

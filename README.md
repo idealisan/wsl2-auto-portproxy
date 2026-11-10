@@ -1,11 +1,13 @@
 # wsl2-auto-portProxy
 
 `wslpp` forwards every TCP port listening inside WSL2 — including `127.0.0.1/::1`
-— to all interfaces of the Windows host, so devices on your LAN can reach your
-WSL services. Zero config: run one agent in WSL, one proxy on Windows.
+— to the Windows host. Zero config: run one agent in WSL, one proxy on Windows.
+Forwards bind `127.0.0.1` by default, so they are reachable only from the host
+itself; opt in to `0.0.0.0` when you actually want LAN access.
 
-> **Security warning**: loopback-only services were never meant to leave the
-> machine. Once forwarded, they are reachable from your LAN. Only use this on
+> **Security warning**: by default a forward binds `127.0.0.1` and stays on
+> the host. Enabling **转发到对外端口** (GUI) or `-external` (CLI) binds
+> `0.0.0.0` and exposes loopback-only services to your LAN — only do that on
 > networks you trust.
 
 ## How it works
@@ -25,12 +27,16 @@ gaps with two pieces:
   `::1`), so loopback-only services work without `--host 0.0.0.0`.
 - `wslpp` (Windows, runs on the host): listens on UDP `:1033`, learns
   `{wslIp, ports, agentPort, process names}` from each broadcast's source
-  address (no `wsl` CLI calls, immune to IP drift), listens on `:P` per port,
-  and dials the agent channel per client connection.
+  address (no `wsl` CLI calls, immune to IP drift), binds `127.0.0.1:P` per
+  port (or `0.0.0.0:P` when external forwarding is enabled), and dials the
+  agent channel per client connection.
 
 There are no config files. Sources silent for over 9s are dropped with
-their proxies. Port availability is checked by binding, with no external
-command. Protocol details live in `docs/001-linux-agent-plan.md`.
+their proxies. A WSL port keeps its number only when it is completely free on
+every local address; otherwise the proxy binds a free random port instead.
+Occupancy is checked with plain Go socket calls — no OS-specific tables, socket
+options or external commands. Protocol details live in
+`docs/001-linux-agent-plan.md`.
 
 ## Install
 
@@ -54,6 +60,8 @@ plus `sudo rm -f /etc/systemd/system/wslpp-agent.service /usr/local/bin/wslpp-ag
 Download `wslpp-windows-<arch>.exe` from
 [Releases](https://github.com/HobaiRiku/wsl2-auto-portproxy/releases)
 and run it (add it to startup for always-on forwarding). Logs go to stdout.
+Forwards bind `127.0.0.1` by default; pass `-external` to bind `0.0.0.0` and
+make them reachable from your LAN.
 
 ### 3. GUI (Windows / macOS)
 
@@ -82,6 +90,10 @@ The GUI lists every WSL listening port with its process name and forwards
   `/proc/<pid>/exe`, so long names are not truncated to 15 characters; an
   older agent leaves the column empty.
 
+Forwards bind `127.0.0.1` and are reachable only from this machine. Tick
+**转发到对外端口** to bind `0.0.0.0` instead and expose the selected ports to
+your LAN; switching it restarts the running forwards on the new address.
+
 Install an agent in every WSL distro you want to reach. All of them appear in
 the same GUI; the **WSL 端口** column shows `IP:port`, so rows from different
 distros are distinguishable even when they listen on the same port.
@@ -89,8 +101,8 @@ distros are distinguishable even when they listen on the same port.
 The GUI and the headless `wslpp.exe` are separate programs — run one or the
 other, not both (they would compete for the same host ports).
 
-> The same security warning applies: forwarding a loopback-only service makes
-> it reachable from your LAN.
+> With the external option off, forwards stay on `127.0.0.1` and never leave
+> the machine. Turn it on only on networks you trust.
 
 ## Releases
 

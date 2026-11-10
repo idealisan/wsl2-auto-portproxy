@@ -35,6 +35,7 @@ type snapshot struct {
 	wslIP      string
 	agentCount int
 	forwarded  int
+	external   bool
 	message    string
 	version    string
 }
@@ -48,6 +49,8 @@ type guiApp struct {
 	chosen     ui.Selection[string]         // multi-selection (Ctrl/Cmd click)
 	enabled    map[string]bool              // ports the user asked to forward
 	running    map[string]int64             // ID -> actual Windows listen port
+	external   bool                         // bind to 0.0.0.0 instead of 127.0.0.1
+	wake       chan struct{}                // ask reconcileLoop to run now
 	agentCount int
 	online     bool
 	wslIP      string
@@ -65,8 +68,20 @@ func newApp() *guiApp {
 		targets:   map[string]wdiscovery.Target{},
 		enabled:   map[string]bool{},
 		running:   map[string]int64{},
+		wake:      make(chan struct{}, 1),
 		message:   "等待 WSL agent 广播…（请确认 wslpp-agent 正在 WSL 内运行）",
 	}
+}
+
+// setExternal switches every forward between loopback-only (safe default) and
+// all interfaces. reconcile notices the change, stops the proxies and rebuilds
+// them on the new address; waking it makes that happen right away.
+func (a *guiApp) setExternal(on bool) {
+	a.mu.Lock()
+	a.external = on
+	a.mu.Unlock()
+	a.wakeReconcile()
+	a.refresh()
 }
 
 // refresh asks the window for a new frame. Update runs the (empty) function on
@@ -118,6 +133,7 @@ func (a *guiApp) snapshotLocked() snapshot {
 		wslIP:      a.wslIP,
 		agentCount: a.agentCount,
 		forwarded:  forwarded,
+		external:   a.external,
 		message:    a.message,
 		version:    version,
 	}

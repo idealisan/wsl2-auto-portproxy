@@ -44,6 +44,11 @@ func (a *guiApp) view(c *ui.Context) {
 				ui.Text(c, "v"+snap.version).TextColor(c.Theme().TextMuted)
 			}
 		})
+		ui.Row(c).Gap(8).Children(func() {
+			external := snap.external
+			cb := ui.Checkbox(c.Key("external"), &external, "转发到对外端口")
+			cb.OnChange(func() { a.setExternal(external) })
+		})
 		ui.Text(c, snap.message).TextColor(c.Theme().TextMuted).SingleLine()
 		ui.Text(c, "点端口数字可复制到剪贴板").TextColor(c.Theme().TextMuted).SingleLine()
 

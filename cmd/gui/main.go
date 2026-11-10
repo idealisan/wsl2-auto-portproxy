@@ -28,7 +28,7 @@ func main() {
 		a.win = mygo.NewWindow(mygo.WindowOptions{
 			Title:     "wslpp 端口转发",
 			Width:     920,
-			Height:    520,
+			Height:    540,
 			MinWidth:  640,
 			MinHeight: 360,
 			Content:   ui.View(a.view),
@@ -45,9 +45,23 @@ func main() {
 }
 
 func (a *guiApp) reconcileLoop() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
 	for {
 		a.reconcile()
-		time.Sleep(time.Second)
+		select {
+		case <-ticker.C:
+		case <-a.wake:
+		}
+	}
+}
+
+// wakeReconcile asks the loop to reconcile again immediately, without waiting
+// for the next one-second tick. It never blocks if a wake is already pending.
+func (a *guiApp) wakeReconcile() {
+	select {
+	case a.wake <- struct{}{}:
+	default:
 	}
 }
 
@@ -68,6 +82,7 @@ func (a *guiApp) reconcile() {
 	for id := range a.enabled {
 		enabled[id] = true
 	}
+	external := a.external
 	a.mu.Unlock()
 
 	should := make([]wdiscovery.Target, 0, len(desired))
@@ -78,6 +93,11 @@ func (a *guiApp) reconcile() {
 		should = append(should, t)
 	}
 
+	// Changing the bind mode means every running proxy must be torn down and
+	// recreated on the new address. The cleanup phase drops the stopped ones;
+	// wake again so the rebuild does not wait for a full tick.
+	rebind := false
+
 	storage.PoolMu.Lock()
 	for _, t := range should {
 		matched := false
@@ -87,9 +107,10 @@ func (a *guiApp) reconcile() {
 				continue
 			}
 			matched = true
-			if p.WslIp != t.WslIP || p.AgentPort != t.AgentPort {
-				// Stale backend (agent restarted / WSL IP drifted); stop it,
-				// the cleanup below drops it and it is recreated next round.
+			if p.WslIp != t.WslIP || p.AgentPort != t.AgentPort || p.External != external {
+				if p.External != external {
+					rebind = true
+				}
 				_ = p.Stop()
 			} else if !p.IsRunning {
 				if err := p.Start(); err != nil {
@@ -99,7 +120,8 @@ func (a *guiApp) reconcile() {
 			break
 		}
 		if !matched {
-			np := proxy.Proxy{ID: t.ID, TargetPort: t.Port, WslIp: t.WslIP, AgentPort: t.AgentPort}
+			np := proxy.Proxy{ID: t.ID, TargetPort: t.Port, WslIp: t.WslIP,
+				AgentPort: t.AgentPort, External: external}
 			if err := np.Start(); err != nil {
 				errs = append(errs, fmt.Sprintf("启动 :%d 失败: %s", t.Port, err))
 			} else {
@@ -112,7 +134,7 @@ func (a *guiApp) reconcile() {
 		keep := false
 		for _, t := range should {
 			pp := &storage.ProxyPool[i]
-			if pp.ID == t.ID && pp.WslIp == t.WslIP && pp.AgentPort == t.AgentPort {
+			if pp.ID == t.ID && pp.WslIp == t.WslIP && pp.AgentPort == t.AgentPort && pp.External == external {
 				keep = true
 				break
 			}
@@ -141,4 +163,7 @@ func (a *guiApp) reconcile() {
 		wslIP = desired[0].WslIP
 	}
 	a.applyState(desired, running, online, wslIP, len(agents), errs)
+	if rebind {
+		a.wakeReconcile()
+	}
 }
