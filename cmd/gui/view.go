@@ -61,7 +61,9 @@ func (a *guiApp) view(c *ui.Context) {
 				cb := ui.Checkbox(c.Key(r.ID), &checked, "")
 				cb.OnChange(func() { a.setRowChecked(r.ID, checked) })
 			case 1:
-				ui.Textf(c, "%s:%d", r.WslIP, r.Port).SingleLine()
+				// IP:port reads best in a monospaced font: digits and dots line
+				// up across rows. monoFont() picks a font the system really has.
+				ui.Textf(c, "%s:%d", r.WslIP, r.Port).SingleLine().Font(monoFont())
 			case 2:
 				// No SingleLine(): long process names wrap and the row grows
 				// instead of being clipped.
@@ -75,7 +77,7 @@ func (a *guiApp) view(c *ui.Context) {
 				ui.ButtonBase(c).Tooltip("点击复制端口").OnClick(func() {
 					a.copyPort(r.ListenPort)
 				}).Children(func() {
-					t := ui.Textf(c, "%d", r.ListenPort)
+					t := ui.Textf(c, "%d", r.ListenPort).Font(monoFont())
 					if r.ListenPort != r.Port {
 						t.Bold()
 					}
