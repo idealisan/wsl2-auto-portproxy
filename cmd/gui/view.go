@@ -53,13 +53,13 @@ func (a *guiApp) view(c *ui.Context) {
 			cb.OnChange(func() { a.setExternal(external) })
 		})
 
-		ui.Table(c, a.listState, cols, len(snap.rows), func(row, col int) {
+		tbl := ui.Table(c, a.listState, cols, len(snap.rows), func(row, col int) {
 			r := snap.rows[row]
 			switch col {
 			case 0:
-				checked := a.chosen.Has(r.ID)
+				checked := r.Checked
 				cb := ui.Checkbox(c.Key(r.ID), &checked, "")
-				cb.OnChange(func() { a.setChecked(r.ID, checked) })
+				cb.OnChange(func() { a.setRowChecked(r.ID, checked) })
 			case 1:
 				ui.Textf(c, "%s:%d", r.WslIP, r.Port).SingleLine()
 			case 2:
@@ -90,6 +90,13 @@ func (a *guiApp) view(c *ui.Context) {
 				ui.Button(c, label).OnClick(func() { a.toggle(r.ID) })
 			}
 		}).Grow(1)
+
+		// A press on the table's blank area, or anywhere outside it, drops the
+		// highlight but keeps the tick boxes: the two are separate states.
+		tbl.OnClick(func() { a.clearHighlight() })
+		if tbl.PressedOutside() {
+			a.clearHighlight()
+		}
 
 		// Bottom actions. Collection changes go through OnClick, which runs
 		// after the view has finished building.

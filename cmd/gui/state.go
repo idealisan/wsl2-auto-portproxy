@@ -46,7 +46,8 @@ type guiApp struct {
 	listState *ui.ListState
 
 	targets    map[string]wdiscovery.Target // by ID
-	chosen     ui.Selection[string]         // multi-selection (Ctrl/Cmd click)
+	chosen     ui.Selection[string]         // highlight (Ctrl/Cmd click), not the ticks
+	checked    map[string]bool              // tick boxes: the rows bulk actions use
 	enabled    map[string]bool              // ports the user asked to forward
 	running    map[string]int64             // ID -> actual Windows listen port
 	external   bool                         // bind to 0.0.0.0 instead of 127.0.0.1
@@ -56,7 +57,7 @@ type guiApp struct {
 	wslIP      string
 	message    string
 
-	// sort and chosen are written by the table on the UI thread and read by
+	// sort, chosen and checked are written on the UI thread and read by
 	// snapshotLocked, which also runs on the UI thread, so they need no lock.
 	sort       ui.SortOrder
 	flashUntil time.Time
@@ -67,6 +68,7 @@ func newApp() *guiApp {
 		listState: &ui.ListState{},
 		targets:   map[string]wdiscovery.Target{},
 		enabled:   map[string]bool{},
+		checked:   map[string]bool{},
 		running:   map[string]int64{},
 		wake:      make(chan struct{}, 1),
 		message:   "等待 WSL agent 广播…（请确认 wslpp-agent 正在 WSL 内运行）",
@@ -117,7 +119,7 @@ func (a *guiApp) snapshotLocked() snapshot {
 			ListenPort: a.running[id],
 			Proc:       t.Proc,
 			WslIP:      t.WslIP,
-			Checked:    a.chosen.Has(id),
+			Checked:    a.checked[id],
 			Enabled:    a.enabled[id],
 			Running:    a.running[id] != 0,
 		}
@@ -167,14 +169,23 @@ func (a *guiApp) applyState(desired []wdiscovery.Target, running map[string]int6
 	a.refresh()
 }
 
-// setChecked syncs a checkbox click into the table's selection. Ctrl/Cmd
-// click, Shift click and Ctrl+A are handled by the table directly.
-func (a *guiApp) setChecked(id string, on bool) {
+// setRowChecked records a tick box click. Ticks are kept apart from the
+// table's highlight (Ctrl/Cmd click), so clearing the highlight leaves them.
+func (a *guiApp) setRowChecked(id string, on bool) {
 	if on {
-		a.chosen.Add(id)
+		a.checked[id] = true
 	} else {
-		a.chosen.Remove(id)
+		delete(a.checked, id)
 	}
+	a.refresh()
+}
+
+// clearHighlight drops the table's highlight without touching the tick boxes.
+func (a *guiApp) clearHighlight() {
+	if a.chosen.Len() == 0 {
+		return
+	}
+	a.chosen.Clear()
 	a.refresh()
 }
 
@@ -191,20 +202,22 @@ func (a *guiApp) toggle(id string) {
 }
 
 func (a *guiApp) selectAll(on bool) {
-	a.chosen.Clear()
-	if on {
-		a.mu.Lock()
-		for id := range a.targets {
-			a.chosen.Add(id)
-		}
-		a.mu.Unlock()
+	if !on {
+		a.checked = map[string]bool{}
+		a.refresh()
+		return
 	}
+	a.mu.Lock()
+	for id := range a.targets {
+		a.checked[id] = true
+	}
+	a.mu.Unlock()
 	a.refresh()
 }
 
 func (a *guiApp) applyChecked(on bool) {
 	var ids []string
-	for id := range a.chosen.All() {
+	for id := range a.checked {
 		ids = append(ids, id)
 	}
 	a.mu.Lock()
