@@ -44,13 +44,14 @@ func (a *guiApp) view(c *ui.Context) {
 				ui.Text(c, "v"+snap.version).TextColor(c.Theme().TextMuted)
 			}
 		})
+		// One compact row: the status hint and the clipboard hint share a line,
+		// and the external checkbox sits at its right edge.
 		ui.Row(c).Gap(8).Children(func() {
+			ui.Text(c, snap.message+"  ·  点端口数字可复制到剪贴板").Grow(1).TextColor(c.Theme().TextMuted).SingleLine()
 			external := snap.external
 			cb := ui.Checkbox(c.Key("external"), &external, "转发到对外端口")
 			cb.OnChange(func() { a.setExternal(external) })
 		})
-		ui.Text(c, snap.message).TextColor(c.Theme().TextMuted).SingleLine()
-		ui.Text(c, "点端口数字可复制到剪贴板").TextColor(c.Theme().TextMuted).SingleLine()
 
 		ui.Table(c, a.listState, cols, len(snap.rows), func(row, col int) {
 			r := snap.rows[row]
